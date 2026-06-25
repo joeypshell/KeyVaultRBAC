@@ -1,0 +1,326 @@
+{
+  "version": "2026-06-25",
+  "fullSets": {
+    "keys": [
+      "backup",
+      "create",
+      "decrypt",
+      "delete",
+      "encrypt",
+      "get",
+      "getrotationpolicy",
+      "import",
+      "list",
+      "purge",
+      "recover",
+      "release",
+      "restore",
+      "rotate",
+      "setrotationpolicy",
+      "sign",
+      "unwrapkey",
+      "update",
+      "verify",
+      "wrapkey"
+    ],
+    "secrets": [
+      "backup",
+      "delete",
+      "get",
+      "list",
+      "purge",
+      "recover",
+      "restore",
+      "set"
+    ],
+    "certificates": [
+      "backup",
+      "create",
+      "delete",
+      "deleteissuers",
+      "get",
+      "getissuers",
+      "import",
+      "list",
+      "listissuers",
+      "managecontacts",
+      "manageissuers",
+      "purge",
+      "recover",
+      "restore",
+      "setissuers",
+      "update"
+    ],
+    "storage": []
+  },
+  "rules": [
+    {
+      "id": "all-data-plane-admin",
+      "when": {
+        "keys": "full",
+        "secrets": "full",
+        "certificates": "full",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Administrator"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Full legacy key, secret, and certificate permissions."
+    },
+    {
+      "id": "secrets-read",
+      "when": {
+        "keys": "empty",
+        "secrets": [
+          "get",
+          "list"
+        ],
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Secrets User"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Secret value and metadata read access."
+    },
+    {
+      "id": "secrets-full",
+      "when": {
+        "keys": "empty",
+        "secrets": "full",
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Secrets Officer"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Full secret lifecycle management."
+    },
+    {
+      "id": "secrets-metadata-only",
+      "when": {
+        "keys": "empty",
+        "secrets": [
+          "list"
+        ],
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Reader"
+      ],
+      "status": "AcceptableOvergrant",
+      "overgrantSummary": "Key Vault Reader also grants metadata read across keys and certificates.",
+      "notes": "Use a custom role if metadata access must be limited to secrets only."
+    },
+    {
+      "id": "secrets-set-only",
+      "when": {
+        "keys": "empty",
+        "secrets": [
+          "set"
+        ],
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Custom: KV Secret Set Only",
+        "Key Vault Secrets Officer"
+      ],
+      "status": "CustomRoleCandidate",
+      "overgrantSummary": "Key Vault Secrets Officer grants read, delete, backup, purge, recover, and restore in addition to set.",
+      "notes": "Prefer a custom role when this pattern is repeated."
+    },
+    {
+      "id": "secrets-get-set",
+      "when": {
+        "keys": "empty",
+        "secrets": [
+          "get",
+          "set"
+        ],
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Custom: KV Secret Get Set",
+        "Key Vault Secrets Officer"
+      ],
+      "status": "CustomRoleCandidate",
+      "overgrantSummary": "Key Vault Secrets Officer grants delete, backup, purge, recover, and restore.",
+      "notes": "Add list/readMetadata only if the application needs enumeration."
+    },
+    {
+      "id": "keys-wrap-unwrap",
+      "when": {
+        "keys": [
+          "get",
+          "list",
+          "unwrapkey",
+          "wrapkey"
+        ],
+        "secrets": "empty",
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Crypto Service Encryption User"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Common SQL/TDE and service-encryption pattern."
+    },
+    {
+      "id": "keys-release",
+      "when": {
+        "keys": [
+          "release"
+        ],
+        "secrets": "empty",
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Crypto Service Release User"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Key release pattern."
+    },
+    {
+      "id": "keys-full",
+      "when": {
+        "keys": "full",
+        "secrets": "empty",
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Crypto Officer"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Full key lifecycle and cryptographic access."
+    },
+    {
+      "id": "keys-crypto-user-common",
+      "when": {
+        "keys": [
+          "decrypt",
+          "encrypt",
+          "get",
+          "list",
+          "sign",
+          "unwrapkey",
+          "verify",
+          "wrapkey"
+        ],
+        "secrets": "empty",
+        "certificates": "empty",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Crypto User"
+      ],
+      "status": "AcceptableOvergrant",
+      "overgrantSummary": "Key Vault Crypto User may include update and backup operations depending on current built-in role definition.",
+      "notes": "Confirm the built-in role definition before approving."
+    },
+    {
+      "id": "certificates-read",
+      "when": {
+        "keys": "empty",
+        "secrets": "empty",
+        "certificates": [
+          "get",
+          "list"
+        ],
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Certificate User"
+      ],
+      "status": "AcceptableOvergrant",
+      "overgrantSummary": "Certificate User includes related secret value and key metadata read permissions needed for certificate contents.",
+      "notes": "Use Key Vault Reader or a custom role if metadata-only access is intended."
+    },
+    {
+      "id": "certificates-full",
+      "when": {
+        "keys": "empty",
+        "secrets": "empty",
+        "certificates": "full",
+        "storage": "empty"
+      },
+      "suggestedRoles": [
+        "Key Vault Certificates Officer"
+      ],
+      "status": "ExactBuiltIn",
+      "overgrantSummary": "",
+      "notes": "Full certificate lifecycle management."
+    }
+  ],
+  "fallbackRules": [
+    {
+      "id": "any-storage-permission",
+      "condition": "hasStorage",
+      "suggestedRoles": [
+        "Needs review"
+      ],
+      "status": "NeedsOwnerReview",
+      "overgrantSummary": "Legacy storage permissions do not have a direct modern Key Vault RBAC mapping in this toolkit.",
+      "notes": "Validate whether the storage account key feature is still in use."
+    },
+    {
+      "id": "partial-key-permissions",
+      "condition": "hasKeysOnly",
+      "suggestedRoles": [
+        "Custom role likely",
+        "Key Vault Crypto User",
+        "Key Vault Crypto Officer"
+      ],
+      "status": "CustomRoleCandidate",
+      "overgrantSummary": "Partial key permission set does not cleanly map to a built-in role.",
+      "notes": "Cluster this permission signature before creating a custom role."
+    },
+    {
+      "id": "partial-secret-permissions",
+      "condition": "hasSecretsOnly",
+      "suggestedRoles": [
+        "Custom role likely",
+        "Key Vault Secrets Officer"
+      ],
+      "status": "CustomRoleCandidate",
+      "overgrantSummary": "Partial secret permission set does not cleanly map to a built-in role.",
+      "notes": "Secrets Officer often expands access beyond the legacy policy."
+    },
+    {
+      "id": "partial-certificate-permissions",
+      "condition": "hasCertificatesOnly",
+      "suggestedRoles": [
+        "Custom role likely",
+        "Key Vault Certificates Officer",
+        "Key Vault Certificate User"
+      ],
+      "status": "CustomRoleCandidate",
+      "overgrantSummary": "Partial certificate permission set does not cleanly map to a built-in role.",
+      "notes": "Review certificate automation and hidden secret dependencies."
+    },
+    {
+      "id": "mixed-or-uncommon",
+      "condition": "default",
+      "suggestedRoles": [
+        "Needs review"
+      ],
+      "status": "NeedsOwnerReview",
+      "overgrantSummary": "Mixed key, secret, or certificate permissions require owner review.",
+      "notes": "Check observed usage before assigning broader built-in roles."
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+{
+  "version": "2026-06-25",
+  "source": "Microsoft Learn Azure built-in roles and Key Vault RBAC guidance",
+  "roles": [
+    {
+      "name": "Key Vault Administrator",
+      "id": "00482a5a-887f-4fb3-b363-3b7fe8e74483",
+      "intent": "Perform all data-plane operations on keys, secrets, and certificates except RBAC role assignment management.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/*"
+      ]
+    },
+    {
+      "name": "Key Vault Reader",
+      "id": "21090545-7ca7-4776-b22c-e363652d74d2",
+      "intent": "Read metadata for vault objects without reading secret values or private key material.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/*/read",
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+      ]
+    },
+    {
+      "name": "Key Vault Secrets User",
+      "id": "4633458b-17de-408a-b874-0445c86b69e6",
+      "intent": "Read secret contents and metadata.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+      ]
+    },
+    {
+      "name": "Key Vault Secrets Officer",
+      "id": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+      "intent": "Perform any action on secrets except permission management.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/secrets/*"
+      ]
+    },
+    {
+      "name": "Key Vault Crypto User",
+      "id": "12338af0-0e69-4776-bea7-57ae8d297424",
+      "intent": "Read key metadata and perform cryptographic operations.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/read",
+        "Microsoft.KeyVault/vaults/keys/encrypt/action",
+        "Microsoft.KeyVault/vaults/keys/decrypt/action",
+        "Microsoft.KeyVault/vaults/keys/wrap/action",
+        "Microsoft.KeyVault/vaults/keys/unwrap/action",
+        "Microsoft.KeyVault/vaults/keys/sign/action",
+        "Microsoft.KeyVault/vaults/keys/verify/action"
+      ]
+    },
+    {
+      "name": "Key Vault Crypto Officer",
+      "id": "14b46e9e-c2b7-41b4-b07b-48a6ebf60603",
+      "intent": "Perform any action on keys except permission management.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/*",
+        "Microsoft.KeyVault/vaults/keyrotationpolicies/*"
+      ]
+    },
+    {
+      "name": "Key Vault Crypto Service Encryption User",
+      "id": "e147488a-f6f5-4113-8e2d-b22465e65bf6",
+      "intent": "Read key metadata and perform wrap/unwrap operations.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/read",
+        "Microsoft.KeyVault/vaults/keys/wrap/action",
+        "Microsoft.KeyVault/vaults/keys/unwrap/action"
+      ]
+    },
+    {
+      "name": "Key Vault Crypto Service Release User",
+      "id": "08bbd89e-9f13-488c-ac41-acfcb10c90ab",
+      "intent": "Release keys.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/release/action"
+      ]
+    },
+    {
+      "name": "Key Vault Certificate User",
+      "id": "db79e9a7-68ee-4b58-9aeb-b90e7c24fcba",
+      "intent": "Read certificate contents, including related secret/key read permissions needed for certificate material.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/certificates/read",
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+        "Microsoft.KeyVault/vaults/keys/read"
+      ]
+    },
+    {
+      "name": "Key Vault Certificates Officer",
+      "id": "a4417e6f-fecd-4de8-b567-7b0420556985",
+      "intent": "Perform any action on certificates except permission management.",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/certificates/*",
+        "Microsoft.KeyVault/vaults/certificatecas/*",
+        "Microsoft.KeyVault/vaults/certificatecontacts/write"
+      ]
+    },
+    {
+      "name": "Key Vault Purge Operator",
+      "id": "a68e7c17-0ab2-4c09-9a58-125dae29748c",
+      "intent": "Purge soft-deleted vaults. Treat as privileged break-glass/admin access.",
+      "dataActions": []
+    }
+  ]
+}

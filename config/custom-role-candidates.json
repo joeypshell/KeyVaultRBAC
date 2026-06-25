@@ -1,0 +1,181 @@
+{
+  "version": "2026-06-25",
+  "permissionToDataAction": {
+    "keys": {
+      "get": [
+        "Microsoft.KeyVault/vaults/keys/read"
+      ],
+      "list": [
+        "Microsoft.KeyVault/vaults/keys/read"
+      ],
+      "encrypt": [
+        "Microsoft.KeyVault/vaults/keys/encrypt/action"
+      ],
+      "decrypt": [
+        "Microsoft.KeyVault/vaults/keys/decrypt/action"
+      ],
+      "wrapkey": [
+        "Microsoft.KeyVault/vaults/keys/wrap/action"
+      ],
+      "unwrapkey": [
+        "Microsoft.KeyVault/vaults/keys/unwrap/action"
+      ],
+      "sign": [
+        "Microsoft.KeyVault/vaults/keys/sign/action"
+      ],
+      "verify": [
+        "Microsoft.KeyVault/vaults/keys/verify/action"
+      ],
+      "release": [
+        "Microsoft.KeyVault/vaults/keys/release/action"
+      ],
+      "backup": [
+        "Microsoft.KeyVault/vaults/keys/backup/action"
+      ],
+      "restore": [
+        "Microsoft.KeyVault/vaults/keys/restore/action"
+      ],
+      "create": [
+        "Microsoft.KeyVault/vaults/keys/create/action"
+      ],
+      "import": [
+        "Microsoft.KeyVault/vaults/keys/import/action"
+      ],
+      "update": [
+        "Microsoft.KeyVault/vaults/keys/update/action"
+      ],
+      "delete": [
+        "Microsoft.KeyVault/vaults/keys/delete"
+      ],
+      "recover": [
+        "Microsoft.KeyVault/vaults/keys/recover/action"
+      ],
+      "purge": [
+        "Microsoft.KeyVault/vaults/keys/purge/action"
+      ],
+      "rotate": [
+        "Microsoft.KeyVault/vaults/keys/rotate/action"
+      ],
+      "getrotationpolicy": [
+        "Microsoft.KeyVault/vaults/keyrotationpolicies/read"
+      ],
+      "setrotationpolicy": [
+        "Microsoft.KeyVault/vaults/keyrotationpolicies/write"
+      ]
+    },
+    "secrets": {
+      "get": [
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action"
+      ],
+      "list": [
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+      ],
+      "set": [
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action"
+      ],
+      "delete": [
+        "Microsoft.KeyVault/vaults/secrets/delete"
+      ],
+      "backup": [
+        "Microsoft.KeyVault/vaults/secrets/backup/action"
+      ],
+      "restore": [
+        "Microsoft.KeyVault/vaults/secrets/restore/action"
+      ],
+      "recover": [
+        "Microsoft.KeyVault/vaults/secrets/recover/action"
+      ],
+      "purge": [
+        "Microsoft.KeyVault/vaults/secrets/purge/action"
+      ]
+    },
+    "certificates": {
+      "get": [
+        "Microsoft.KeyVault/vaults/certificates/read"
+      ],
+      "list": [
+        "Microsoft.KeyVault/vaults/certificates/read"
+      ],
+      "create": [
+        "Microsoft.KeyVault/vaults/certificates/create/action"
+      ],
+      "import": [
+        "Microsoft.KeyVault/vaults/certificates/import/action"
+      ],
+      "update": [
+        "Microsoft.KeyVault/vaults/certificates/write"
+      ],
+      "delete": [
+        "Microsoft.KeyVault/vaults/certificates/delete"
+      ],
+      "backup": [
+        "Microsoft.KeyVault/vaults/certificates/backup/action"
+      ],
+      "restore": [
+        "Microsoft.KeyVault/vaults/certificates/restore/action"
+      ],
+      "recover": [
+        "Microsoft.KeyVault/vaults/certificates/recover/action"
+      ],
+      "purge": [
+        "Microsoft.KeyVault/vaults/certificates/purge/action"
+      ],
+      "managecontacts": [
+        "Microsoft.KeyVault/vaults/certificatecontacts/write"
+      ],
+      "manageissuers": [
+        "Microsoft.KeyVault/vaults/certificatecas/*"
+      ],
+      "getissuers": [
+        "Microsoft.KeyVault/vaults/certificatecas/read"
+      ],
+      "listissuers": [
+        "Microsoft.KeyVault/vaults/certificatecas/read"
+      ],
+      "setissuers": [
+        "Microsoft.KeyVault/vaults/certificatecas/write"
+      ],
+      "deleteissuers": [
+        "Microsoft.KeyVault/vaults/certificatecas/delete"
+      ]
+    }
+  },
+  "templates": [
+    {
+      "name": "KV Secret Set Only",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action"
+      ]
+    },
+    {
+      "name": "KV Secret Metadata Reader",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action"
+      ]
+    },
+    {
+      "name": "KV Secret Get Set",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/setSecret/action"
+      ]
+    },
+    {
+      "name": "KV Key Unwrap Only",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/read",
+        "Microsoft.KeyVault/vaults/keys/unwrap/action"
+      ]
+    },
+    {
+      "name": "KV Backup Reader",
+      "dataActions": [
+        "Microsoft.KeyVault/vaults/keys/read",
+        "Microsoft.KeyVault/vaults/keys/backup/action",
+        "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+        "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+        "Microsoft.KeyVault/vaults/secrets/backup/action"
+      ]
+    }
+  ]
+}
