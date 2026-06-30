@@ -3,76 +3,89 @@
 
 <#
 .SYNOPSIS
-Adds or updates a legacy Azure Key Vault access policy for ea-admins to read/list secrets.
+Adds or updates a legacy Azure Key Vault access policy so a group can read/list secrets.
 
 .DESCRIPTION
+This script is intentionally additive and report-first.
+
 - Legacy Key Vault access-policy model only.
-- Secrets only by default: Get,List.
+- Secrets permissions only by default: Get,List.
 - Dry-run by default; use -Apply to make changes.
-- Scans only the configured subscriptions.
-- Discovers vault resource groups automatically.
-- Preserves existing broader permissions for the same principal.
+- Scans the configured subscriptions only.
+- Discovers Key Vault resource groups automatically.
+- Preserves existing broader secret permissions for the same principal.
+- Treats missing vaults as warnings and continues.
 - Writes a CSV audit report.
 
 .REUSE
-Change future runs by passing parameters rather than editing the script:
+Override subscriptions, vaults, group, or permissions by passing parameters rather than editing the script.
 
-  .\Add-EAAdmins-SecretReadAccess.ps1 `
+.EXAMPLE
+.\Add-EAAdmins-SecretReadAccess.ps1
+
+Runs a dry-run using the default ea-admins object ID, default dev/key subscriptions, and embedded vault list.
+
+.EXAMPLE
+.\Add-EAAdmins-SecretReadAccess.ps1 -Apply
+
+Applies the default Get,List secret permissions.
+
+.EXAMPLE
+.\Add-EAAdmins-SecretReadAccess.ps1 `
     -SubscriptionIds "sub-guid-1","sub-guid-2" `
-    -VaultNames "kv1","kv2" `
+    -VaultNames "kv-one","kv-two" `
     -SecretPermissions Get,List,Set `
     -Apply
 
-Or place vault names / subscription IDs in files, one per line. Blank lines and # comments are ignored:
+Runs against supplied subscriptions and vaults with a different secret permission set.
 
-  .\Add-EAAdmins-SecretReadAccess.ps1 -VaultNameFile .\vaults.txt -SubscriptionIdFile .\subs.txt
+.EXAMPLE
+.\Add-EAAdmins-SecretReadAccess.ps1 -SubscriptionIdFile .\subs.txt -VaultNameFile .\vaults.txt
+
+Reads one subscription ID or vault name per line. Blank lines and inline comments are ignored.
 
 .NOTES
-The caller must have rights to update Key Vault access policies, such as permissions including:
+The caller must have rights to update Key Vault access policies, such as a role containing:
 Microsoft.KeyVault/vaults/write
 #>
 
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string]$GroupObjectId = "a729596d-0067-4b98-a9dc-40c6f0ebf0b3",
+    [string] $GroupObjectId = 'a729596d-0067-4b98-a9dc-40c6f0ebf0b3',
 
     [Parameter()]
-    [string]$GroupDisplayName = "ea-admins",
-
-    # Defaults supplied by request:
-    # dev  = 3df3368e-87ec-47e7-b8e0-9b167359367b
-    # keys = 411471df-72d5-414b-b227-60d5bd0ddb78
-    [Parameter()]
-    [string[]]$SubscriptionIds,
+    [string] $GroupDisplayName = 'ea-admins',
 
     [Parameter()]
-    [string]$SubscriptionIdFile,
+    [string[]] $SubscriptionIds,
 
     [Parameter()]
-    [string[]]$VaultNames,
+    [string] $SubscriptionIdFile,
 
     [Parameter()]
-    [string]$VaultNameFile,
+    [string[]] $VaultNames,
 
     [Parameter()]
-    [ValidateSet("Get", "List", "Set", "Delete", "Backup", "Restore", "Recover", "Purge")]
-    [string[]]$SecretPermissions = @("Get", "List"),
-
-    # Dry-run by default. Add -Apply to make changes.
-    [Parameter()]
-    [switch]$Apply,
+    [string] $VaultNameFile,
 
     [Parameter()]
-    [string]$OutputCsv = (Join-Path -Path (Get-Location) -ChildPath ("kv-secret-access-policy-results-{0}.csv" -f (Get-Date -Format "yyyyMMdd-HHmmss")) )
+    [ValidateSet('Get', 'List', 'Set', 'Delete', 'Backup', 'Restore', 'Recover', 'Purge')]
+    [string[]] $SecretPermissions = @('Get', 'List'),
+
+    [Parameter()]
+    [switch] $Apply,
+
+    [Parameter()]
+    [string] $OutputCsv = (Join-Path -Path (Get-Location) -ChildPath ("kv-secret-access-policy-results-{0}.csv" -f (Get-Date -Format 'yyyyMMdd-HHmmss')))
 )
 
-$ErrorActionPreference = "Stop"
 Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
 
 $DefaultSubscriptionIds = @(
-    "3df3368e-87ec-47e7-b8e0-9b167359367b", # dev
-    "411471df-72d5-414b-b227-60d5bd0ddb78"  # keys
+    '3df3368e-87ec-47e7-b8e0-9b167359367b', # dev
+    '411471df-72d5-414b-b227-60d5bd0ddb78'  # keys
 )
 
 $DefaultVaultNamesText = @'
@@ -169,22 +182,19 @@ kvscstest01
 
 function Normalize-StringList {
     param(
-        [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
-        [string[]]$Items
+        [string[]] $Items
     )
 
     $seen = @{}
     $clean = New-Object System.Collections.Generic.List[string]
 
-    foreach ($item in $Items) {
-        if ($null -eq $item) {
+    foreach ($Item in @($Items)) {
+        if ($null -eq $Item) {
             continue
         }
 
-        # Allow inline comments in text files: value # comment
-        $value = (($item -replace '\s+#.*$', '').Trim())
-
+        $value = (($Item -replace '\s+#.*$', '').Trim())
         if ([string]::IsNullOrWhiteSpace($value)) {
             continue
         }
@@ -202,7 +212,7 @@ function Normalize-StringList {
 function Get-ListFromFile {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string] $Path
     )
 
     if (-not (Test-Path -Path $Path -PathType Leaf)) {
@@ -212,49 +222,20 @@ function Get-ListFromFile {
     return Normalize-StringList -Items (Get-Content -Path $Path -ErrorAction Stop)
 }
 
-function Get-PolicyPermissions {
-    param(
-        [Parameter()]
-        [object]$Policy,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$PropertyNames
-    )
-
-    if ($null -eq $Policy) {
-        return @()
-    }
-
-    foreach ($propertyName in $PropertyNames) {
-        $property = $Policy.PSObject.Properties |
-            Where-Object { $_.Name -ieq $propertyName } |
-            Select-Object -First 1
-
-        if ($null -ne $property -and $null -ne $property.Value) {
-            return @($property.Value | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-        }
-    }
-
-    return @()
-}
-
 function Merge-Permissions {
     param(
-        [Parameter()]
-        [object[]]$Existing,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$Desired
+        [object[]] $Existing,
+        [string[]] $Desired
     )
 
     $map = @{}
 
-    foreach ($permission in @($Existing) + @($Desired)) {
+    foreach ($permission in (@($Existing) + @($Desired))) {
         if ($null -eq $permission) {
             continue
         }
 
-        $value = ([string]$permission).Trim()
+        $value = ([string] $permission).Trim()
         if ([string]::IsNullOrWhiteSpace($value)) {
             continue
         }
@@ -267,32 +248,31 @@ function Merge-Permissions {
 
 function Get-MissingPermissions {
     param(
-        [Parameter()]
-        [object[]]$Existing,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$Desired
+        [object[]] $Existing,
+        [string[]] $Desired
     )
 
     $existingMap = @{}
+
     foreach ($permission in @($Existing)) {
         if ($null -eq $permission) {
             continue
         }
 
-        $value = ([string]$permission).Trim()
+        $value = ([string] $permission).Trim()
         if (-not [string]::IsNullOrWhiteSpace($value)) {
             $existingMap[$value.ToLowerInvariant()] = $true
         }
     }
 
-    # If someone already has All, do not report granular permissions as missing.
-    if ($existingMap.ContainsKey("all")) {
+    # Existing All already covers any granular requested permission.
+    if ($existingMap.ContainsKey('all')) {
         return @()
     }
 
     $missing = New-Object System.Collections.Generic.List[string]
-    foreach ($permission in $Desired) {
+
+    foreach ($permission in @($Desired)) {
         if (-not $existingMap.ContainsKey($permission.ToLowerInvariant())) {
             $missing.Add($permission)
         }
@@ -301,50 +281,44 @@ function Get-MissingPermissions {
     return $missing.ToArray()
 }
 
-$Results = New-Object System.Collections.Generic.List[object]
-$FoundVaults = @{}
-$HadSubscriptionScanFailure = $false
-
 function Add-Result {
     param(
-        [string]$VaultName,
-        [string]$SubscriptionName,
-        [string]$SubscriptionId,
-        [string]$TenantId,
-        [string]$ResourceGroupName,
-        [string]$VaultTenantId,
-        [string]$GroupDisplayName,
-        [string]$GroupObjectId,
-        [string]$DesiredSecretPermissions,
-        [string]$ExistingSecretPermissions,
-        [string]$FinalSecretPermissions,
-        [string]$Action,
-        [string]$Status,
-        [string]$Detail
+        [string] $VaultName,
+        [string] $SubscriptionName,
+        [string] $SubscriptionId,
+        [string] $TenantId,
+        [string] $ResourceGroupName,
+        [string] $VaultTenantId,
+        [string] $DesiredSecretPermissions,
+        [string] $ExistingSecretPermissions,
+        [string] $FinalSecretPermissions,
+        [string] $Action,
+        [string] $Status,
+        [string] $Detail
     )
 
-    $script:Results.Add([pscustomobject]@{
-        VaultName                = $VaultName
-        SubscriptionName         = $SubscriptionName
-        SubscriptionId           = $SubscriptionId
-        SubscriptionTenantId     = $TenantId
-        ResourceGroupName        = $ResourceGroupName
-        VaultTenantId            = $VaultTenantId
-        GroupDisplayName         = $GroupDisplayName
-        GroupObjectId            = $GroupObjectId
-        DesiredSecretPermissions = $DesiredSecretPermissions
+    $script:Results.Add([pscustomobject] @{
+        VaultName                 = $VaultName
+        SubscriptionName          = $SubscriptionName
+        SubscriptionId            = $SubscriptionId
+        SubscriptionTenantId      = $TenantId
+        ResourceGroupName         = $ResourceGroupName
+        VaultTenantId             = $VaultTenantId
+        GroupDisplayName          = $GroupDisplayName
+        GroupObjectId             = $GroupObjectId
+        DesiredSecretPermissions  = $DesiredSecretPermissions
         ExistingSecretPermissions = $ExistingSecretPermissions
-        FinalSecretPermissions   = $FinalSecretPermissions
-        Action                   = $Action
-        Status                   = $Status
-        Detail                   = $Detail
+        FinalSecretPermissions    = $FinalSecretPermissions
+        Action                    = $Action
+        Status                    = $Status
+        Detail                    = $Detail
     })
 }
 
 if ($SubscriptionIdFile) {
     $SubscriptionIds = Get-ListFromFile -Path $SubscriptionIdFile
 }
-elseif (-not $PSBoundParameters.ContainsKey("SubscriptionIds") -or $null -eq $SubscriptionIds -or @($SubscriptionIds).Count -eq 0) {
+elseif (-not $PSBoundParameters.ContainsKey('SubscriptionIds') -or @($SubscriptionIds).Count -eq 0) {
     $SubscriptionIds = $DefaultSubscriptionIds
 }
 else {
@@ -354,25 +328,26 @@ else {
 if ($VaultNameFile) {
     $VaultNames = Get-ListFromFile -Path $VaultNameFile
 }
-elif (-not $PSBoundParameters.ContainsKey("VaultNames") -or $null -eq $VaultNames -or @($VaultNames).Count -eq 0) {
+elseif (-not $PSBoundParameters.ContainsKey('VaultNames') -or @($VaultNames).Count -eq 0) {
     $VaultNames = Normalize-StringList -Items ($DefaultVaultNamesText -split '\r?\n')
 }
 else {
     $VaultNames = Normalize-StringList -Items $VaultNames
 }
 
+$SubscriptionIds = Normalize-StringList -Items $SubscriptionIds
 $SecretPermissions = Normalize-StringList -Items $SecretPermissions
 
 if (@($SubscriptionIds).Count -eq 0) {
-    throw "No subscription IDs were supplied."
+    throw 'No subscription IDs were supplied.'
 }
 
 if (@($VaultNames).Count -eq 0) {
-    throw "No Key Vault names were supplied."
+    throw 'No Key Vault names were supplied.'
 }
 
 if (@($SecretPermissions).Count -eq 0) {
-    throw "No secret permissions were supplied."
+    throw 'No secret permissions were supplied.'
 }
 
 $TargetVaultLookup = @{}
@@ -384,18 +359,21 @@ if (-not (Get-AzContext -ErrorAction SilentlyContinue)) {
     Connect-AzAccount -ErrorAction Stop | Out-Null
 }
 
+$Results = New-Object System.Collections.Generic.List[object]
+$FoundVaults = @{}
+$HadSubscriptionScanFailure = $false
+
 Write-Host "Mode: $(if ($Apply) { 'APPLY' } else { 'DRY-RUN' })"
 Write-Host "Group: $GroupDisplayName [$GroupObjectId]"
 Write-Host "Subscriptions: $($SubscriptionIds -join ', ')"
 Write-Host "Target vault count: $($VaultNames.Count)"
 Write-Host "Desired secret permissions: $($SecretPermissions -join ',')"
 Write-Host "Output CSV: $OutputCsv"
-Write-Host ""
+Write-Host ''
 
 foreach ($subscriptionId in $SubscriptionIds) {
-    $subscription = $null
-    $subscriptionName = ""
-    $tenantId = ""
+    $subscriptionName = ''
+    $tenantId = ''
 
     try {
         $subscription = Get-AzSubscription -SubscriptionId $subscriptionId -ErrorAction Stop
@@ -408,19 +386,17 @@ foreach ($subscriptionId in $SubscriptionIds) {
         $HadSubscriptionScanFailure = $true
 
         Add-Result `
-            -VaultName "" `
+            -VaultName '' `
             -SubscriptionName $subscriptionName `
             -SubscriptionId $subscriptionId `
             -TenantId $tenantId `
-            -ResourceGroupName "" `
-            -VaultTenantId "" `
-            -GroupDisplayName $GroupDisplayName `
-            -GroupObjectId $GroupObjectId `
+            -ResourceGroupName '' `
+            -VaultTenantId '' `
             -DesiredSecretPermissions ($SecretPermissions -join ',') `
-            -ExistingSecretPermissions "" `
-            -FinalSecretPermissions "" `
-            -Action "SetSubscriptionContext" `
-            -Status "Failed" `
+            -ExistingSecretPermissions '' `
+            -FinalSecretPermissions '' `
+            -Action 'SetSubscriptionContext' `
+            -Status 'Failed' `
             -Detail $_.Exception.Message
 
         continue
@@ -435,19 +411,17 @@ foreach ($subscriptionId in $SubscriptionIds) {
         $HadSubscriptionScanFailure = $true
 
         Add-Result `
-            -VaultName "" `
+            -VaultName '' `
             -SubscriptionName $subscriptionName `
             -SubscriptionId $subscriptionId `
             -TenantId $tenantId `
-            -ResourceGroupName "" `
-            -VaultTenantId "" `
-            -GroupDisplayName $GroupDisplayName `
-            -GroupObjectId $GroupObjectId `
+            -ResourceGroupName '' `
+            -VaultTenantId '' `
             -DesiredSecretPermissions ($SecretPermissions -join ',') `
-            -ExistingSecretPermissions "" `
-            -FinalSecretPermissions "" `
-            -Action "ListKeyVaults" `
-            -Status "Failed" `
+            -ExistingSecretPermissions '' `
+            -FinalSecretPermissions '' `
+            -Action 'ListKeyVaults' `
+            -Status 'Failed' `
             -Detail $_.Exception.Message
 
         continue
@@ -465,9 +439,8 @@ foreach ($subscriptionId in $SubscriptionIds) {
         $FoundVaults[$vaultName.ToLowerInvariant()] = $true
 
         try {
-            # Re-read the full vault object by name/RG for current access policy details.
             $vault = Get-AzKeyVault -VaultName $vaultName -ResourceGroupName $resourceGroupName -ErrorAction Stop
-            $vaultTenantId = [string]$vault.TenantId
+            $vaultTenantId = [string] $vault.TenantId
 
             if ($vault.EnableRbacAuthorization -eq $true) {
                 Add-Result `
@@ -477,35 +450,29 @@ foreach ($subscriptionId in $SubscriptionIds) {
                     -TenantId $tenantId `
                     -ResourceGroupName $resourceGroupName `
                     -VaultTenantId $vaultTenantId `
-                    -GroupDisplayName $GroupDisplayName `
-                    -GroupObjectId $GroupObjectId `
                     -DesiredSecretPermissions ($SecretPermissions -join ',') `
-                    -ExistingSecretPermissions "" `
-                    -FinalSecretPermissions "" `
-                    -Action "Skipped" `
-                    -Status "Warning" `
-                    -Detail "Vault has EnableRbacAuthorization=true. Script only handles legacy access policies."
+                    -ExistingSecretPermissions '' `
+                    -FinalSecretPermissions '' `
+                    -Action 'Skipped' `
+                    -Status 'Warning' `
+                    -Detail 'Vault has EnableRbacAuthorization=true. Script only handles legacy access policies.'
 
                 continue
             }
 
             $existingPolicy = @(
                 $vault.AccessPolicies | Where-Object {
-                    ([string]$_.ObjectId) -eq ([string]$GroupObjectId)
+                    ([string] $_.ObjectId) -eq ([string] $GroupObjectId)
                 }
             ) | Select-Object -First 1
 
-            $existingSecretPermissions = Get-PolicyPermissions `
-                -Policy $existingPolicy `
-                -PropertyNames @("PermissionsToSecrets", "SecretPermissions", "Secrets")
+            $existingSecretPermissions = @()
+            if ($existingPolicy) {
+                $existingSecretPermissions = @($existingPolicy.PermissionsToSecrets | ForEach-Object { ([string] $_).Trim() } | Where-Object { $_ })
+            }
 
-            $missingSecretPermissions = Get-MissingPermissions `
-                -Existing $existingSecretPermissions `
-                -Desired $SecretPermissions
-
-            $finalSecretPermissions = Merge-Permissions `
-                -Existing $existingSecretPermissions `
-                -Desired $SecretPermissions
+            $missingSecretPermissions = Get-MissingPermissions -Existing $existingSecretPermissions -Desired $SecretPermissions
+            $finalSecretPermissions = Merge-Permissions -Existing $existingSecretPermissions -Desired $SecretPermissions
 
             if (@($missingSecretPermissions).Count -eq 0) {
                 Add-Result `
@@ -515,21 +482,17 @@ foreach ($subscriptionId in $SubscriptionIds) {
                     -TenantId $tenantId `
                     -ResourceGroupName $resourceGroupName `
                     -VaultTenantId $vaultTenantId `
-                    -GroupDisplayName $GroupDisplayName `
-                    -GroupObjectId $GroupObjectId `
                     -DesiredSecretPermissions ($SecretPermissions -join ',') `
                     -ExistingSecretPermissions ($existingSecretPermissions -join ',') `
                     -FinalSecretPermissions ($finalSecretPermissions -join ',') `
-                    -Action "AlreadyCompliant" `
-                    -Status "Success" `
-                    -Detail "Existing access policy already includes desired secret permissions. No change needed."
+                    -Action 'AlreadyCompliant' `
+                    -Status 'Success' `
+                    -Detail 'Existing access policy already includes desired secret permissions. No change needed.'
 
                 continue
             }
 
-            # Optional pre-check for the Key Vault access policy limit when adding a brand-new policy.
-            $policyCount = @($vault.AccessPolicies).Count
-            if ($null -eq $existingPolicy -and $policyCount -ge 1024) {
+            if ($null -eq $existingPolicy -and @($vault.AccessPolicies).Count -ge 1024) {
                 Add-Result `
                     -VaultName $vaultName `
                     -SubscriptionName $subscriptionName `
@@ -537,14 +500,12 @@ foreach ($subscriptionId in $SubscriptionIds) {
                     -TenantId $tenantId `
                     -ResourceGroupName $resourceGroupName `
                     -VaultTenantId $vaultTenantId `
-                    -GroupDisplayName $GroupDisplayName `
-                    -GroupObjectId $GroupObjectId `
                     -DesiredSecretPermissions ($SecretPermissions -join ',') `
-                    -ExistingSecretPermissions "" `
+                    -ExistingSecretPermissions '' `
                     -FinalSecretPermissions ($finalSecretPermissions -join ',') `
-                    -Action "PolicyLimitReached" `
-                    -Status "Failed" `
-                    -Detail "Vault already has 1024 access policies. Remove or consolidate an existing policy before adding this group."
+                    -Action 'PolicyLimitReached' `
+                    -Status 'Failed' `
+                    -Detail 'Vault already has 1024 access policies. Remove or consolidate an existing policy before adding this group.'
 
                 continue
             }
@@ -559,39 +520,27 @@ foreach ($subscriptionId in $SubscriptionIds) {
                     -PermissionsToSecrets $finalSecretPermissions `
                     -ErrorAction Stop | Out-Null
 
-                Add-Result `
-                    -VaultName $vaultName `
-                    -SubscriptionName $subscriptionName `
-                    -SubscriptionId $subscriptionId `
-                    -TenantId $tenantId `
-                    -ResourceGroupName $resourceGroupName `
-                    -VaultTenantId $vaultTenantId `
-                    -GroupDisplayName $GroupDisplayName `
-                    -GroupObjectId $GroupObjectId `
-                    -DesiredSecretPermissions ($SecretPermissions -join ',') `
-                    -ExistingSecretPermissions ($existingSecretPermissions -join ',') `
-                    -FinalSecretPermissions ($finalSecretPermissions -join ',') `
-                    -Action "AccessPolicySet" `
-                    -Status "Success" `
-                    -Detail $detail
+                $action = 'AccessPolicySet'
+                $status = 'Success'
             }
             else {
-                Add-Result `
-                    -VaultName $vaultName `
-                    -SubscriptionName $subscriptionName `
-                    -SubscriptionId $subscriptionId `
-                    -TenantId $tenantId `
-                    -ResourceGroupName $resourceGroupName `
-                    -VaultTenantId $vaultTenantId `
-                    -GroupDisplayName $GroupDisplayName `
-                    -GroupObjectId $GroupObjectId `
-                    -DesiredSecretPermissions ($SecretPermissions -join ',') `
-                    -ExistingSecretPermissions ($existingSecretPermissions -join ',') `
-                    -FinalSecretPermissions ($finalSecretPermissions -join ',') `
-                    -Action "WouldSetAccessPolicy" `
-                    -Status "DryRun" `
-                    -Detail $detail
+                $action = 'WouldSetAccessPolicy'
+                $status = 'DryRun'
             }
+
+            Add-Result `
+                -VaultName $vaultName `
+                -SubscriptionName $subscriptionName `
+                -SubscriptionId $subscriptionId `
+                -TenantId $tenantId `
+                -ResourceGroupName $resourceGroupName `
+                -VaultTenantId $vaultTenantId `
+                -DesiredSecretPermissions ($SecretPermissions -join ',') `
+                -ExistingSecretPermissions ($existingSecretPermissions -join ',') `
+                -FinalSecretPermissions ($finalSecretPermissions -join ',') `
+                -Action $action `
+                -Status $status `
+                -Detail $detail
         }
         catch {
             Add-Result `
@@ -600,14 +549,12 @@ foreach ($subscriptionId in $SubscriptionIds) {
                 -SubscriptionId $subscriptionId `
                 -TenantId $tenantId `
                 -ResourceGroupName $resourceGroupName `
-                -VaultTenantId "" `
-                -GroupDisplayName $GroupDisplayName `
-                -GroupObjectId $GroupObjectId `
+                -VaultTenantId '' `
                 -DesiredSecretPermissions ($SecretPermissions -join ',') `
-                -ExistingSecretPermissions "" `
-                -FinalSecretPermissions "" `
-                -Action "ProcessVault" `
-                -Status "Failed" `
+                -ExistingSecretPermissions '' `
+                -FinalSecretPermissions '' `
+                -Action 'ProcessVault' `
+                -Status 'Failed' `
                 -Detail $_.Exception.Message
         }
     }
@@ -615,27 +562,25 @@ foreach ($subscriptionId in $SubscriptionIds) {
 
 foreach ($targetVaultName in $VaultNames) {
     if (-not $FoundVaults.ContainsKey($targetVaultName.ToLowerInvariant())) {
-        $detail = if ($HadSubscriptionScanFailure) {
-            "Vault was not found in successfully scanned subscriptions. At least one subscription scan failed, so verify manually."
+        if ($HadSubscriptionScanFailure) {
+            $detail = 'Vault was not found in successfully scanned subscriptions. At least one subscription scan failed, so verify manually.'
         }
         else {
-            "Vault was not found in the configured subscriptions."
+            $detail = 'Vault was not found in the configured subscriptions.'
         }
 
         Add-Result `
             -VaultName $targetVaultName `
-            -SubscriptionName "" `
-            -SubscriptionId "" `
-            -TenantId "" `
-            -ResourceGroupName "" `
-            -VaultTenantId "" `
-            -GroupDisplayName $GroupDisplayName `
-            -GroupObjectId $GroupObjectId `
+            -SubscriptionName '' `
+            -SubscriptionId '' `
+            -TenantId '' `
+            -ResourceGroupName '' `
+            -VaultTenantId '' `
             -DesiredSecretPermissions ($SecretPermissions -join ',') `
-            -ExistingSecretPermissions "" `
-            -FinalSecretPermissions "" `
-            -Action "NotFound" `
-            -Status "Warning" `
+            -ExistingSecretPermissions '' `
+            -FinalSecretPermissions '' `
+            -Action 'NotFound' `
+            -Status 'Warning' `
             -Detail $detail
     }
 }
@@ -644,9 +589,9 @@ $sortedResults = $Results | Sort-Object Status, Action, VaultName, SubscriptionN
 $sortedResults | Format-Table -AutoSize
 $sortedResults | Export-Csv -Path $OutputCsv -NoTypeInformation
 
-Write-Host ""
+Write-Host ''
 Write-Host "Results written to: $OutputCsv"
 
 if (-not $Apply) {
-    Write-Host "Dry-run only. Re-run with -Apply to make changes."
+    Write-Host 'Dry-run only. Re-run with -Apply to make changes.'
 }
