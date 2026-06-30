@@ -8,13 +8,14 @@ The workflow is intentionally report-first:
 Inventory -> Normalize -> Map -> Exception Review -> Pre-stage RBAC -> Pilot Flip -> Validate -> Rollout -> Cleanup
 ```
 
-The scripts do not enable RBAC on any vault. They inventory current state, classify access-policy permissions, flag over-grants, and generate reviewable role-assignment commands.
+The scripts do not enable RBAC on any vault. They inventory current state, classify access-policy permissions, flag over-grants, generate reviewable role-assignment commands, and support targeted legacy access-policy maintenance where needed.
 
 ## Files
 
 ```text
 scripts/Export-KeyVaultLegacyAccess.ps1
 scripts/Resolve-KeyVaultRbacMapping.ps1
+scripts/Add-EAAdmins-SecretReadAccess.ps1
 config/access-policy-permission-map.json
 config/built-in-role-map.json
 config/custom-role-candidates.json
@@ -70,6 +71,31 @@ The mapping script writes:
 08-likely-unused-access.csv
 09-migration-wave-plan.csv
 10-role-assignment-commands.ps1
+```
+
+## Targeted legacy access-policy maintenance
+
+Use `scripts/Add-EAAdmins-SecretReadAccess.ps1` to add or update the `ea-admins` group with secret `Get,List` access on the configured dev Key Vaults while the vaults still use legacy access policies.
+
+Dry-run first:
+
+```powershell
+.\scripts\Add-EAAdmins-SecretReadAccess.ps1
+```
+
+Apply after reviewing the output and generated CSV:
+
+```powershell
+.\scripts\Add-EAAdmins-SecretReadAccess.ps1 -Apply
+```
+
+The script is reusable. You can override subscriptions, vault names, group object ID, and secret permissions with parameters or input files:
+
+```powershell
+.\scripts\Add-EAAdmins-SecretReadAccess.ps1 `
+  -SubscriptionIdFile .\subs.txt `
+  -VaultNameFile .\vaults.txt `
+  -SecretPermissions Get,List
 ```
 
 ## Review Model
