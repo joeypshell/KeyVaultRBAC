@@ -153,4 +153,73 @@ if ($mappedTenantRow.MoveTiming -ne 'ReapplyAfterTenantTransfer') {
     throw "Expected ReapplyAfterTenantTransfer, got $($mappedTenantRow.MoveTiming)."
 }
 
+$global:KeyVaultRbacSmokeGraphCalls = New-Object System.Collections.Generic.List[object]
+function Search-AzGraph {
+    param(
+        [string] $Query,
+        [string[]] $Subscription,
+        [int] $First,
+        [int] $Skip
+    )
+
+    if ($First -gt 1000) {
+        throw "Search-AzGraph page size exceeded 1000: $First"
+    }
+
+    $global:KeyVaultRbacSmokeGraphCalls.Add([pscustomobject]@{
+        First = $First
+        Skip  = $Skip
+    })
+
+    $available = 1001
+    $pageCount = [Math]::Min($First, [Math]::Max(0, $available - $Skip))
+    for ($offset = 0; $offset -lt $pageCount; $offset++) {
+        $index = $Skip + $offset
+        [pscustomobject]@{
+            subscriptionId             = '00000000-0000-0000-0000-000000000001'
+            resourceGroup              = 'rg-test'
+            vaultName                  = "kv-pagination-$index"
+            vaultId                    = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-test/providers/Microsoft.KeyVault/vaults/kv-pagination-$index"
+            location                   = 'eastus'
+            tenantId                   = '11111111-1111-1111-1111-111111111111'
+            enableRbacAuthorization    = 'false'
+            accessPolicies             = @()
+            tags                       = @{}
+            softDeleteEnabled          = 'true'
+            purgeProtectionEnabled     = 'true'
+            networkAcls                = $null
+            privateEndpointConnections = @()
+        }
+    }
+}
+
+function Get-AzContext {
+    return [pscustomobject]@{
+        Account      = 'smoke-test'
+        Subscription = 'smoke-test'
+        Tenant       = 'smoke-test'
+    }
+}
+
+$paginationOut = Join-Path $testOut 'pagination'
+& (Join-Path $repoRoot 'scripts\Export-KeyVaultLegacyAccess.ps1') `
+    -OutputPath $paginationOut `
+    -First 1001 `
+    -SkipAzContextCheck
+
+$paginationRows = @(Import-Csv -LiteralPath (Join-Path $paginationOut '01-vault-inventory.csv'))
+if ($paginationRows.Count -ne 1001) {
+    throw "Expected 1001 paginated vault rows, got $($paginationRows.Count)."
+}
+if ($global:KeyVaultRbacSmokeGraphCalls.Count -ne 2) {
+    throw "Expected two Resource Graph requests, got $($global:KeyVaultRbacSmokeGraphCalls.Count)."
+}
+if ($global:KeyVaultRbacSmokeGraphCalls[0].First -ne 1000 -or $global:KeyVaultRbacSmokeGraphCalls[0].Skip -ne 0) {
+    throw 'The first Resource Graph page did not request records 0-999.'
+}
+if ($global:KeyVaultRbacSmokeGraphCalls[1].First -ne 1 -or $global:KeyVaultRbacSmokeGraphCalls[1].Skip -ne 1000) {
+    throw 'The second Resource Graph page did not request the remaining record.'
+}
+Remove-Variable -Scope Global -Name KeyVaultRbacSmokeGraphCalls -ErrorAction SilentlyContinue
+
 Write-Host "Smoke tests passed. Output: $testOut"

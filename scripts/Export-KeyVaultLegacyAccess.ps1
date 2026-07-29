@@ -5,6 +5,7 @@ param(
     [switch] $ResolvePrincipals,
     [switch] $IncludeRbac,
     [string[]] $ManagementGroupScope,
+    [ValidateRange(1, 2147483647)]
     [int] $First = 5000,
     [switch] $SkipAzContextCheck
 )
@@ -17,6 +18,47 @@ function Assert-CommandAvailable {
     if (-not (Get-Command -Name $Name -ErrorAction SilentlyContinue)) {
         throw "Required command '$Name' was not found. Install the relevant Az module and retry."
     }
+}
+
+function Search-AzGraphPaged {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Query,
+
+        [string[]] $Subscription,
+
+        [Parameter(Mandatory)]
+        [int] $MaximumResults
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $skip = 0
+
+    while ($results.Count -lt $MaximumResults) {
+        $pageSize = [Math]::Min(1000, $MaximumResults - $results.Count)
+        $parameters = @{
+            Query = $Query
+            First = $pageSize
+            Skip  = $skip
+        }
+
+        if ($Subscription -and $Subscription.Count -gt 0) {
+            $parameters.Subscription = $Subscription
+        }
+
+        $page = @(Search-AzGraph @parameters)
+        foreach ($item in $page) {
+            $results.Add($item)
+        }
+
+        if ($page.Count -lt $pageSize) {
+            break
+        }
+
+        $skip += $page.Count
+    }
+
+    return $results.ToArray()
 }
 
 function ConvertTo-CompactJson {
@@ -254,18 +296,15 @@ resources
     purgeProtectionEnabled = tostring(properties.enablePurgeProtection),
     networkAcls = properties.networkAcls,
     privateEndpointConnections = properties.privateEndpointConnections
+| order by vaultId asc
 "@
 
-$searchParameters = @{
-    Query = $vaultQuery
-    First = $First
-}
-
-if ($SubscriptionId -and $SubscriptionId.Count -gt 0) {
-    $searchParameters.Subscription = $SubscriptionId
-}
-
-$vaults = @(Search-AzGraph @searchParameters)
+$vaults = @(
+    Search-AzGraphPaged `
+        -Query $vaultQuery `
+        -Subscription $SubscriptionId `
+        -MaximumResults $First
+)
 
 $script:PrincipalCache = @{}
 $policyRows = New-Object System.Collections.Generic.List[object]
@@ -451,7 +490,14 @@ if (-not $ResolvePrincipals) {
     }
 }
 
-$rbacCounts = $rbacRows | Where-Object { $_.PrincipalId } | Group-Object -Property VaultId -AsHashTable -AsString
+$rbacCounts = @{}
+$groupedRbacCounts = $rbacRows |
+    Where-Object { $_.PrincipalId } |
+    Group-Object -Property VaultId -AsHashTable -AsString
+if ($groupedRbacCounts) {
+    $rbacCounts = $groupedRbacCounts
+}
+
 foreach ($row in $vaultRows) {
     $key = [string]$row.VaultId
     if ($rbacCounts.ContainsKey($key)) {
