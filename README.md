@@ -23,6 +23,7 @@ config/built-in-role-map.json
 config/custom-role-candidates.json
 config/key-vault-subscription-move-plan.example.csv
 config/principal-map.example.csv
+docs/MANAGEMENT-BRIEF.md
 docs/SUBSCRIPTION-TENANT-SEQUENCING.md
 tests/Invoke-SmokeTests.ps1
 tests/fixtures/02-access-policy-inventory.csv
@@ -132,6 +133,10 @@ The preflight script is read-only. It checks tenant alignment, target resource-g
 ```
 
 It does not call `Move-AzResource`.
+
+Use [the management decision brief](docs/MANAGEMENT-BRIEF.md) to prepare the
+recommended sequence, decision requests, risk controls, and pilot approval for
+stakeholder review.
 
 See [subscription and tenant sequencing](docs/SUBSCRIPTION-TENANT-SEQUENCING.md) before moving vaults or transferring subscriptions between tenants.
 
