@@ -15,9 +15,15 @@ The scripts do not enable RBAC on any vault. They inventory current state, class
 ```text
 scripts/Export-KeyVaultLegacyAccess.ps1
 scripts/Resolve-KeyVaultRbacMapping.ps1
+scripts/New-KeyVaultRbacStagingPlan.ps1
+scripts/Set-KeyVaultRbacAssignments.ps1
+scripts/Test-KeyVaultSubscriptionMove.ps1
 config/access-policy-permission-map.json
 config/built-in-role-map.json
 config/custom-role-candidates.json
+config/key-vault-subscription-move-plan.example.csv
+config/principal-map.example.csv
+docs/SUBSCRIPTION-TENANT-SEQUENCING.md
 tests/Invoke-SmokeTests.ps1
 tests/fixtures/02-access-policy-inventory.csv
 ```
@@ -32,6 +38,7 @@ Connect-AzAccount
 ```
 
 Optional identity enrichment uses `Get-AzADUser`, `Get-AzADServicePrincipal`, and `Get-AzADGroup` from `Az.Resources`.
+Install `Az.Monitor` if the subscription-move preflight should inventory diagnostic settings.
 
 ## 1. Export inventory
 
@@ -72,6 +79,62 @@ The mapping script writes:
 10-role-assignment-commands.ps1
 ```
 
+`10-role-assignment-commands.ps1` contains static vault resource IDs and must be regenerated after a resource move. For move-aware and idempotent staging, use the assignment-plan workflow below.
+
+## 3. Build a Move-Aware RBAC Staging Plan
+
+Copy `config/key-vault-subscription-move-plan.example.csv` to an untracked working file and replace the sample values. The move manifest translates source vault locations to their intended destination subscriptions and resource groups.
+
+After setting `ApprovedBy` on approved rows in `06-role-mapping-proposed.csv`:
+
+```powershell
+.\scripts\New-KeyVaultRbacStagingPlan.ps1 `
+  -MappingPath .\out\06-role-mapping-proposed.csv `
+  -MovePlanPath .\config\key-vault-subscription-move-plan.csv `
+  -OutputPath .\out\11-rbac-assignment-plan.csv
+```
+
+For a later cross-tenant reapplication, also supply a principal map based on `config/principal-map.example.csv`.
+
+## 4. Stage RBAC Without Changing the Vault Permission Model
+
+Validate and preview:
+
+```powershell
+.\scripts\Set-KeyVaultRbacAssignments.ps1 `
+  -PlanPath .\out\11-rbac-assignment-plan.csv `
+  -ValidatePlanOnly
+
+.\scripts\Set-KeyVaultRbacAssignments.ps1 `
+  -PlanPath .\out\11-rbac-assignment-plan.csv `
+  -WhatIf
+```
+
+Apply approved role assignments:
+
+```powershell
+.\scripts\Set-KeyVaultRbacAssignments.ps1 `
+  -PlanPath .\out\11-rbac-assignment-plan.csv `
+  -ResultPath .\out\12-rbac-assignment-results.csv
+```
+
+The script is idempotent and never changes `enableRbacAuthorization`. By default, it skips vaults that already use the Azure RBAC data-plane model.
+
+## 5. Preflight a Same-Tenant Subscription Move
+
+The preflight script is read-only. It checks tenant alignment, target resource-group readiness, provider registration, direct and inherited role assignments, diagnostic settings, private endpoint connections, and optional ARM move validation.
+
+```powershell
+.\scripts\Test-KeyVaultSubscriptionMove.ps1 `
+  -MovePlanPath .\config\key-vault-subscription-move-plan.csv `
+  -OutputPath .\out `
+  -RunArmValidation
+```
+
+It does not call `Move-AzResource`.
+
+See [subscription and tenant sequencing](docs/SUBSCRIPTION-TENANT-SEQUENCING.md) before moving vaults or transferring subscriptions between tenants.
+
 ## Review Model
 
 Mapping statuses are:
@@ -85,7 +148,7 @@ NeedsOwnerReview
 DoNotMigrateYet
 ```
 
-Only `ExactBuiltIn` and `AcceptableOvergrant` rows are emitted as active `New-AzRoleAssignment` commands by default. Review/custom-role rows are written as comments in `10-role-assignment-commands.ps1`.
+Static commands in `10-role-assignment-commands.ps1` are commented by default. `-EmitActiveCommands` enables the older static-command flow for `ExactBuiltIn` and `AcceptableOvergrant` rows, but the move-aware staging-plan workflow is preferred.
 
 ## Smoke Test
 
@@ -103,3 +166,5 @@ The mapping configuration was seeded from current Microsoft Learn guidance:
 - [Key Vault RBAC migration](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-migration)
 - [Azure built-in roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles)
 - [Azure custom roles](https://learn.microsoft.com/en-us/azure/role-based-access-control/custom-roles)
+- [Move Azure resources to another subscription](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/move-resource-group-and-subscription)
+- [Transfer a subscription to another Microsoft Entra directory](https://learn.microsoft.com/en-us/azure/role-based-access-control/transfer-subscription)

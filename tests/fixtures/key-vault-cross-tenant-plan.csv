@@ -1,0 +1,2 @@
+"Environment","SourceSubscriptionId","SourceResourceGroup","VaultName","DestinationTenantId","DestinationSubscriptionId","DestinationResourceGroup"
+"dev","00000000-0000-0000-0000-000000000001","rg-data","kv-sql-dev","22222222-2222-2222-2222-222222222222","00000000-0000-0000-0000-000000000001","rg-data"

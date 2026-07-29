@@ -1,3 +1,5 @@
 out/
 tests/out/
 *.log
+config/key-vault-subscription-move-plan.csv
+config/principal-map.csv

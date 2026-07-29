@@ -219,6 +219,7 @@ Assert-CommandAvailable -Name 'Get-AzContext'
 
 if ($IncludeRbac) {
     Assert-CommandAvailable -Name 'Get-AzRoleAssignment'
+    Assert-CommandAvailable -Name 'Set-AzContext'
 }
 
 if ($ResolvePrincipals) {
@@ -271,6 +272,10 @@ $policyRows = New-Object System.Collections.Generic.List[object]
 $vaultRows = New-Object System.Collections.Generic.List[object]
 $rbacRows = New-Object System.Collections.Generic.List[object]
 $principalRows = New-Object System.Collections.Generic.List[object]
+$rbacRowKeys = @{}
+$subscriptionRoleAssignmentCache = @{}
+$activeRbacSubscriptionId = ''
+$originalContext = Get-AzContext
 
 foreach ($vault in $vaults) {
     $policies = ConvertTo-Array $vault.accessPolicies
@@ -330,72 +335,95 @@ foreach ($vault in $vaults) {
     }
 
     if ($IncludeRbac) {
-        $candidateScopes = New-Object System.Collections.Generic.List[string]
-        if ($ManagementGroupScope) {
-            foreach ($mgScope in $ManagementGroupScope) {
-                if ($mgScope -like '/providers/Microsoft.Management/managementGroups/*') {
-                    $candidateScopes.Add($mgScope)
+        try {
+            if ($activeRbacSubscriptionId -ine [string]$vault.subscriptionId) {
+                Set-AzContext -SubscriptionId $vault.subscriptionId -ErrorAction Stop | Out-Null
+                $activeRbacSubscriptionId = [string]$vault.subscriptionId
+            }
+
+            if (-not $subscriptionRoleAssignmentCache.ContainsKey($activeRbacSubscriptionId)) {
+                $subscriptionRoleAssignmentCache[$activeRbacSubscriptionId] = @(Get-AzRoleAssignment -ErrorAction Stop)
+            }
+
+            $effectiveAssignments = @(Get-AzRoleAssignment -Scope $vault.vaultId -ErrorAction Stop)
+            $childAssignments = @(
+                $subscriptionRoleAssignmentCache[$activeRbacSubscriptionId] |
+                    Where-Object { [string]$_.Scope -like "$($vault.vaultId)/*" }
+            )
+
+            foreach ($assignment in @($effectiveAssignments + $childAssignments)) {
+                $assignmentScope = [string]$assignment.Scope
+                $roleAssignmentId = [string]$assignment.RoleAssignmentId
+                $rowKey = if ($roleAssignmentId) {
+                    "$($vault.vaultId)|$roleAssignmentId".ToLowerInvariant()
                 }
                 else {
-                    $candidateScopes.Add("/providers/Microsoft.Management/managementGroups/$mgScope")
+                    "$($vault.vaultId)|$assignmentScope|$($assignment.ObjectId)|$($assignment.RoleDefinitionId)".ToLowerInvariant()
                 }
-            }
-        }
 
-        $candidateScopes.Add("/subscriptions/$($vault.subscriptionId)")
-        $candidateScopes.Add("/subscriptions/$($vault.subscriptionId)/resourceGroups/$($vault.resourceGroup)")
-        $candidateScopes.Add($vault.vaultId)
-
-        foreach ($scope in ($candidateScopes | Select-Object -Unique)) {
-            try {
-                $assignments = @(Get-AzRoleAssignment -Scope $scope -ErrorAction Stop)
-                foreach ($assignment in $assignments) {
-                    $assignmentScope = [string]$assignment.Scope
-                    $isRelevant = ($assignmentScope -ieq $scope) -or ($assignmentScope -ieq $vault.vaultId) -or ($assignmentScope -like "$($vault.vaultId)/*")
-                    if (-not $isRelevant) {
-                        continue
-                    }
-
-                    $principalId = [string]$assignment.ObjectId
-                    if ($ResolvePrincipals -and $principalId) {
-                        [void](Resolve-Principal -ObjectId $principalId)
-                    }
-
-                    $rbacRows.Add([pscustomobject]@{
-                        SubscriptionId       = $vault.subscriptionId
-                        ResourceGroup        = $vault.resourceGroup
-                        VaultName            = $vault.vaultName
-                        VaultId              = $vault.vaultId
-                        AssignmentScope      = $assignmentScope
-                        ScopeKind            = Get-ScopeKind -Scope $assignmentScope -VaultId $vault.vaultId -SubscriptionId $vault.subscriptionId -ResourceGroup $vault.resourceGroup
-                        RoleDefinitionName   = $assignment.RoleDefinitionName
-                        RoleDefinitionId     = $assignment.RoleDefinitionId
-                        PrincipalId          = $principalId
-                        PrincipalType        = $assignment.ObjectType
-                        PrincipalDisplayName = $assignment.DisplayName
-                        CanDelegate          = $assignment.CanDelegate
-                        Error                = ''
-                    })
+                if ($rbacRowKeys.ContainsKey($rowKey)) {
+                    continue
                 }
-            }
-            catch {
+                $rbacRowKeys[$rowKey] = $true
+
+                $principalId = [string]$assignment.ObjectId
+                if ($ResolvePrincipals -and $principalId) {
+                    [void](Resolve-Principal -ObjectId $principalId)
+                }
+
                 $rbacRows.Add([pscustomobject]@{
                     SubscriptionId       = $vault.subscriptionId
                     ResourceGroup        = $vault.resourceGroup
                     VaultName            = $vault.vaultName
                     VaultId              = $vault.vaultId
-                    AssignmentScope      = $scope
-                    ScopeKind            = Get-ScopeKind -Scope $scope -VaultId $vault.vaultId -SubscriptionId $vault.subscriptionId -ResourceGroup $vault.resourceGroup
-                    RoleDefinitionName   = ''
-                    RoleDefinitionId     = ''
-                    PrincipalId          = ''
-                    PrincipalType        = ''
-                    PrincipalDisplayName = ''
-                    CanDelegate          = ''
-                    Error                = $_.Exception.Message
+                    AssignmentScope      = $assignmentScope
+                    ScopeKind            = Get-ScopeKind -Scope $assignmentScope -VaultId $vault.vaultId -SubscriptionId $vault.subscriptionId -ResourceGroup $vault.resourceGroup
+                    RoleDefinitionName   = $assignment.RoleDefinitionName
+                    RoleDefinitionId     = $assignment.RoleDefinitionId
+                    RoleAssignmentId     = $roleAssignmentId
+                    PrincipalId          = $principalId
+                    PrincipalType        = $assignment.ObjectType
+                    PrincipalDisplayName = $assignment.DisplayName
+                    CanDelegate          = $assignment.CanDelegate
+                    Description          = $assignment.Description
+                    ConditionVersion     = $assignment.ConditionVersion
+                    Condition            = $assignment.Condition
+                    DelegatedManagedIdentityResourceId = $assignment.DelegatedManagedIdentityResourceId
+                    Error                = ''
                 })
             }
         }
+        catch {
+            $rbacRows.Add([pscustomobject]@{
+                SubscriptionId       = $vault.subscriptionId
+                ResourceGroup        = $vault.resourceGroup
+                VaultName            = $vault.vaultName
+                VaultId              = $vault.vaultId
+                AssignmentScope      = $vault.vaultId
+                ScopeKind            = 'Vault'
+                RoleDefinitionName   = ''
+                RoleDefinitionId     = ''
+                RoleAssignmentId     = ''
+                PrincipalId          = ''
+                PrincipalType        = ''
+                PrincipalDisplayName = ''
+                CanDelegate          = ''
+                Description          = ''
+                ConditionVersion     = ''
+                Condition            = ''
+                DelegatedManagedIdentityResourceId = ''
+                Error                = $_.Exception.Message
+            })
+        }
+    }
+}
+
+if ($IncludeRbac -and $originalContext) {
+    try {
+        Set-AzContext -Context $originalContext -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Warning "Unable to restore the original Azure context: $($_.Exception.Message)"
     }
 }
 
