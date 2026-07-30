@@ -1,6 +1,6 @@
-# Management Decision Brief: Key Vault Subscription and RBAC Sequencing
+# Management Decision Brief: Key Vault Subscription and Management RBAC
 
-Prepared: 2026-07-29
+Prepared: 2026-07-30
 
 Status: The proposed approach and supporting scripts are ready for review. Live
 environment inventory and move validation must be completed before execution is
@@ -10,16 +10,19 @@ authorized.
 
 Approve a phased plan that separates three changes:
 
-1. Move dev and QA Key Vault resources into dedicated `dev-keys` and `qa-keys`
-   subscriptions while all subscriptions are still in the current tenant.
-2. Recreate and stage approved vault-level Azure RBAC assignments at the new
-   resource scopes, while leaving legacy Key Vault access policies active.
+1. Inventory current management-plane Azure RBAC at every scope and approve
+   which assignments should apply to `dev-keys`, `qa-keys`, production, or a
+   narrower resource scope.
+2. Create the destination subscriptions, establish approved management-plane
+   access, and move dev and QA Key Vault resources while all subscriptions are
+   still in the current tenant.
 3. Transfer the completed subscriptions to the new tenant later as a separate
    identity and authorization change.
 
-Do not enable the Key Vault RBAC permission model, remove legacy access
-policies, or combine the resource move with the tenant transfer during this
-phase.
+Key Vault data-plane authorization remains on legacy access policies. Do not
+assign data-plane-bearing roles, enable the Key Vault RBAC permission model,
+remove legacy access policies, or combine the resource move with the tenant
+transfer during this phase.
 
 ## Decisions Requested
 
@@ -28,12 +31,13 @@ Management approval is requested for:
 - The phased sequence above.
 - Creation and funding of the `dev-keys` and `qa-keys` subscriptions in the
   current tenant.
-- A read-only discovery and move-preflight exercise.
+- A read-only management-plane IAM inventory and move-preflight exercise.
+- The target management-plane role and scope model for each new subscription.
 - Selection of one low-risk dev vault and application as the pilot.
 - Named business, application, IAM/security, Azure platform, and network
   approvers.
-- Separate change records for the vault resource moves, the later tenant
-  transfers, and the eventual RBAC authorization cutover.
+- Separate change records for destination management access, vault resource
+  moves, and the later tenant transfers.
 
 This meeting is not a request to authorize an unvalidated production move.
 
@@ -47,30 +51,34 @@ This meeting is not a request to authorize an unvalidated production move.
 - RBAC inherited from the source resource group or subscription stops applying
   after the move. RBAC at the destination parent scope starts applying.
 - Legacy Key Vault access policies remain part of the vault configuration during
-  a same-tenant move, preserving the current data-plane authorization path while
-  RBAC is prepared.
+  a same-tenant move, preserving the current data-plane authorization path.
 - A later subscription transfer to another tenant permanently removes Azure
   role assignments and custom roles. Current-tenant RBAC is therefore not a
   bridge into the target tenant.
-- Moving the vaults first establishes their final subscription-based resource
-  IDs before the tenant transfer and avoids rebuilding pre-move vault-level role
-  assignments.
+- Establishing destination management access before each move prevents the
+  source subscription's inherited administration from being mistaken for
+  destination access.
 
 ## Scope Boundaries
 
 In scope:
 
-- Current-state vault, legacy access-policy, and effective RBAC inventory.
-- Principal resolution and owner review.
+- Current-state management-plane RBAC, PIM, deny-assignment, and role-definition
+  inventory.
+- Principal, role, scope, and owner review.
+- Classification of resource-group assignments that might become environment
+  subscription assignments.
 - Creation of destination subscriptions and resource groups.
+- Creation of approved management-plane assignments in those subscriptions.
 - Same-tenant dev and QA vault moves.
-- Re-creation of approved RBAC assignments at destination scopes.
 - Validation while legacy authorization remains active.
 
 Out of scope for this phase:
 
 - Setting `enableRbacAuthorization` to `true`.
 - Removing legacy access policies.
+- Mapping legacy Key Vault permissions to data-plane RBAC roles.
+- Assigning roles containing `DataActions` as part of this work.
 - Transferring a subscription to the new tenant.
 - Replacing identities with target-tenant identities.
 - Automatically approving over-granted built-in roles or custom roles.
@@ -81,22 +89,24 @@ Out of scope for this phase:
 | Gate | Work | Exit criteria |
 | --- | --- | --- |
 | 0. Architecture approval | Approve sequencing, scope, owners, and subscription model | Management decision recorded |
-| 1. Discovery | Export vaults, policies, RBAC, principals, dependencies, policies, locks, diagnostics, and networking | Every vault classified; unresolved access has an owner |
-| 2. Destination readiness | Create subscriptions/resource groups, register `Microsoft.KeyVault`, establish destination admin access, and confirm policy/network readiness | Source and destination tenant IDs match; destination controls approved |
+| 1. Discovery | Export management-plane RBAC, PIM, deny assignments, roles, vaults, dependencies, policies, locks, diagnostics, and networking | Every management assignment classified; unresolved roles and principals have owners |
+| 2. Destination readiness | Create subscriptions/resource groups, register `Microsoft.KeyVault`, establish approved destination management access, and confirm policy/network readiness | Source and destination tenant IDs match; destination controls and IAM approved |
 | 3. Pilot approval | Run ARM move validation and application-specific testing for one low-risk dev vault | No blockers; app owner and platform owner approve |
-| 4. Pilot move | Move the vault, re-export state, recreate approved RBAC, and validate management/data-plane behavior | Success criteria met during observation period |
+| 4. Pilot move | Move the vault, re-export state, and validate management access and unchanged legacy data-plane behavior | Success criteria met during observation period |
 | 5. Dev/QA waves | Repeat the validated process in small groups | Every wave has evidence and owner signoff |
 | 6. Later tenant transfer | Map target identities, export authorization, transfer subscription, update vault tenant data, and rebuild access | Separate runbook and change approval completed |
-| 7. Eventual RBAC cutover | Pilot `enableRbacAuthorization`, validate, then roll out | Separate security and application approval |
 
 No gate advances solely because the previous script completed. Each gate requires
 review of its output and named approval.
 
 ## Expected Operational Impact
 
-Adding RBAC assignments while legacy authorization is active does not change the
-Key Vault data-plane permission model. It proves that principals, roles, and
-scopes can be resolved, but it does not prove application access through RBAC.
+Management-plane roles containing no `DataActions` do not directly grant key,
+secret, or certificate operations. However, a role that includes
+`Microsoft.KeyVault/vaults/write`, such as Contributor or Key Vault Contributor,
+can modify legacy access policies within its scope and can therefore create an
+indirect path to data-plane access. Treat those rows as privileged escalation
+risk, prefer PIM and narrow scope, and require explicit security approval.
 
 The vault resource move still requires a controlled change window because:
 
@@ -115,14 +125,16 @@ The vault resource move still requires a controlled change window because:
 | Risk | Control |
 | --- | --- |
 | Application loses data-plane access | Keep legacy access policies active; require application validation after each move |
-| Vault-level RBAC is lost during the move | Export direct assignments and recreate only approved assignments at the destination resource ID |
+| Direct management RBAC is lost during the move | Export direct assignments and recreate only approved management assignments at the destination resource ID |
 | Administrators lose control-plane access | Compare source and destination inherited RBAC before the move; establish destination administration first |
-| A broad built-in role expands privilege | Classify mappings as exact, over-granted, custom-role candidate, unused, or owner-review; require `ApprovedBy` |
+| An RG role is promoted too broadly at subscription scope | Require principal, role, environment, and blast-radius review before `ApprovedBy` |
+| A data-plane-bearing role enters the management plan | Keep every role with `DataActions` in the exclusions report unless separately approved |
+| A management role changes legacy access policies | Flag `Microsoft.KeyVault/vaults/write`, use narrow scope/PIM, and require security approval |
 | Policy, lock, provider, or quota blocks the move | Run read-only preflight and ARM move validation before approval |
 | Private endpoint, DNS, diagnostics, or CMK dependency fails | Record dependency owner and execute a service-specific validation checklist |
 | Wrong tenant or subscription is used | Record immutable subscription and tenant IDs; do not rely on display names |
 | Tenant transfer is treated as a normal resource move | Use a separate runbook that remaps identities and rebuilds all RBAC/custom roles |
-| Too many changes obscure the failure cause | Separate subscription move, RBAC staging, tenant transfer, and RBAC authorization cutover |
+| Too many changes obscure the failure cause | Separate management IAM setup, subscription move, and tenant transfer |
 
 ## Stop Conditions
 
@@ -146,20 +158,16 @@ validated change, not the primary rollback mechanism.
 ## Evidence Required Before Each Move
 
 - `01-vault-inventory.csv`
-- `02-access-policy-inventory.csv`
-- `03-existing-rbac-inventory.csv`
-- `04-principal-resolution.csv`
-- Approved `06-role-mapping-proposed.csv`
-- `11-rbac-assignment-plan.csv`
 - `13-subscription-move-preflight.csv`
 - `14-role-assignments-to-recreate.csv`
 - `15-parent-scope-role-delta.csv`
-- `16-authorization-review.csv`
-- `17-role-definitions-used.csv`
-- `18-principal-summary.csv`
-- `19-scope-summary.csv`
-- `20-inventory-coverage.csv`
-- `21-inventory-errors.csv`
+- Approved `16-management-plane-access-review.csv`
+- `17-role-definition-classification.csv`
+- `18-management-principal-summary.csv`
+- `19-management-scope-summary.csv`
+- `20-management-inventory-coverage.csv`
+- `21-management-inventory-errors.csv`
+- Reviewed `22-non-management-rbac-exclusions.csv`
 - Successful ARM move validation
 - Application owner test plan
 - Monitoring and dependency baseline
@@ -169,12 +177,10 @@ validated change, not the primary rollback mechanism.
 
 Ready:
 
-- Report-first inventory and mapping toolkit.
-- Move-aware RBAC assignment planning.
+- Report-first management-plane IAM inventory and scope-classification toolkit.
 - Read-only subscription-move preflight.
-- Idempotent RBAC assignment validation and apply workflow.
-- Subscription-wide authorization export with scope classification, PIM,
-  deny-assignment, role-definition, principal, and coverage reports.
+- Subscription-wide management-plane export with active RBAC, PIM,
+  deny-assignment, role-definition, principal, exclusion, and coverage reports.
 - Local smoke tests, including Resource Graph pagination beyond 1,000 records.
 - Written subscription and tenant sequencing runbook.
 
@@ -223,23 +229,23 @@ Before the meeting:
 5. Identify one low-risk dev pilot and its application owner.
 6. List known private endpoints, CMK consumers, disk-encryption dependencies,
    diagnostics, automation, and IaC owners.
-7. Decide who can approve role over-grants and custom roles.
+7. Decide who can approve an RG-to-subscription scope promotion and any custom
+   management role.
 8. Bring this document and the detailed sequencing runbook; do not lead with the
    scripts.
 
 ## Sixty-Second Talk Track
 
-> I recommend that we separate the work into three controlled changes. First, we
-> move the dev and QA vaults into dedicated subscriptions while all subscriptions
-> are still in the current tenant. Second, after each move, we recreate and
-> validate the approved vault-level RBAC assignments, but we leave the existing
-> access-policy model active, so this phase does not cut applications over to
-> RBAC. Third, we transfer those completed subscriptions to the new tenant later
-> using a separate identity-remapping runbook. This order matters because direct
-> vault RBAC assignments do not follow a resource move, and all RBAC assignments
-> are deleted during a tenant transfer. I am asking for approval of the sequence,
-> destination subscriptions, owners, and a read-only pilot-preparation phase, not
-> approval for an unvalidated bulk move.
+> I recommend that we first inventory the existing Azure management-plane roles
+> and decide which access belongs in dev, QA, production, or a narrower resource
+> scope. We then create `dev-keys` and `qa-keys`, establish that approved
+> management access, and move the vaults while all subscriptions are still in the
+> current tenant. Key Vault application access remains on the existing legacy
+> access policies; data-plane RBAC is not part of this change. The later tenant
+> transfer is a separate identity-remapping change because Azure role assignments
+> do not transfer. I am asking for approval of the subscription model,
+> management-access review, owners, and pilot preparation, not a data-plane
+> authorization cutover or an unvalidated bulk move.
 
 ## Likely Questions
 
@@ -250,19 +256,21 @@ share a tenant. Moving them before tenant transfer establishes the final
 subscription resource IDs and removes a schedule dependency from the later
 tenant cutover.
 
-**Why not assign all vault-level RBAC first?**
+**Why not copy every existing RG assignment to the new subscriptions?**
 
-The move changes the vault resource ID. Direct vault and child-object role
-assignments do not move, so they would have to be recreated.
+Subscription scope is broader than resource-group scope. Promote an assignment
+only when the same principal genuinely needs the same management role over every
+resource in that environment subscription.
 
 **Does this turn off the current access model?**
 
-No. The scripts do not change `enableRbacAuthorization`, and legacy access
-policies remain active during this phase.
+No. The management inventory does not read or change access policies, does not
+assign roles containing `DataActions`, and does not change
+`enableRbacAuthorization`. Legacy access policies remain active.
 
 **Does that mean there is no outage risk?**
 
-No. It removes the RBAC-cutover risk, but the resource move can still affect ARM
+No. It removes data-plane cutover risk, but the resource move can still affect ARM
 references, inherited administration, policy, networking, diagnostics, CMK
 dependencies, locks, and automation. That is why a pilot and change window are
 required.
@@ -286,5 +294,6 @@ instant rollback.
 - [Subscription and tenant sequencing](SUBSCRIPTION-TENANT-SEQUENCING.md)
 - [Move Azure resources to another subscription](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/move-resource-group-and-subscription)
 - [Move an Azure Key Vault to another subscription](https://learn.microsoft.com/en-us/azure/key-vault/general/move-subscription)
+- [Assign a Key Vault access policy and legacy-model security warning](https://learn.microsoft.com/en-us/azure/key-vault/general/assign-access-policy)
 - [Migrate Key Vault access policies to Azure RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-migration)
 - [Transfer a subscription to another Microsoft Entra directory](https://learn.microsoft.com/en-us/azure/role-based-access-control/transfer-subscription)

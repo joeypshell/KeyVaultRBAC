@@ -1,19 +1,24 @@
-# Key Vault Access Policy to RBAC Migration Toolkit
+# Key Vault Subscription Move and Management-Plane RBAC Toolkit
 
-This repository contains a conservative starter toolkit for migrating Azure Key Vaults from legacy access policies to Azure RBAC.
+This repository supports splitting Key Vault resources across `dev-keys`,
+`qa-keys`, and production subscriptions while keeping Key Vault data-plane
+authorization on legacy access policies.
 
-The workflow is intentionally report-first:
+The current workflow is intentionally report-first:
 
 ```text
-Inventory -> Normalize -> Map -> Exception Review -> Pre-stage RBAC -> Pilot Flip -> Validate -> Rollout -> Cleanup
+Management IAM inventory -> Scope review -> Create subscriptions -> Assign approved management RBAC -> Move -> Validate
 ```
 
-The scripts do not enable RBAC on any vault. They inventory current state, classify access-policy permissions, flag over-grants, and generate reviewable role-assignment commands.
+The management-plane inventory does not read or change Key Vault access
+policies, does not enable the Key Vault RBAC data-plane model, and does not
+create assignments. Older access-policy mapping tools remain available for
+analysis but are outside the current execution scope.
 
 ## Files
 
 ```text
-scripts/Export-SubscriptionAuthorizationInventory.ps1
+scripts/Export-SubscriptionManagementPlaneAccess.ps1
 scripts/Export-KeyVaultLegacyAccess.ps1
 scripts/Resolve-KeyVaultRbacMapping.ps1
 scripts/New-KeyVaultRbacStagingPlan.ps1
@@ -27,7 +32,7 @@ config/principal-map.example.csv
 docs/MANAGEMENT-BRIEF.md
 docs/SUBSCRIPTION-TENANT-SEQUENCING.md
 tests/Invoke-SmokeTests.ps1
-tests/Invoke-AuthorizationInventoryTests.ps1
+tests/Invoke-ManagementPlaneInventoryTests.ps1
 tests/fixtures/02-access-policy-inventory.csv
 ```
 
@@ -36,32 +41,37 @@ tests/fixtures/02-access-policy-inventory.csv
 Install and authenticate with Azure PowerShell:
 
 ```powershell
-Install-Module Az.Accounts,Az.ResourceGraph,Az.Resources -Scope CurrentUser
+Install-Module Az.Accounts,Az.Resources -Scope CurrentUser
 Connect-AzAccount
 ```
 
-Optional identity enrichment uses `Get-AzADUser`, `Get-AzADServicePrincipal`, and `Get-AzADGroup` from `Az.Resources`.
+`Az.ResourceGraph` is required only for the separate Key Vault resource and
+legacy-policy inventory.
 Install `Az.Monitor` if the subscription-move preflight should inventory diagnostic settings.
 
-## 1A. Export Subscription-Wide Authorization
+## 1. Export Management-Plane Access
 
-Use the comprehensive export before deciding which resource-group assignments
+Use this export before deciding which resource-group assignments
 should become `dev-keys`, `qa-keys`, or production subscription assignments:
 
 ```powershell
-.\scripts\Export-SubscriptionAuthorizationInventory.ps1 `
+.\scripts\Export-SubscriptionManagementPlaneAccess.ps1 `
   -SubscriptionId '<keys-subscription-id>' `
   -OutputPath .\out
 ```
 
 By default, the script inventories:
 
-- Active and classic RBAC assignments below the subscription and assignments
+- Active RBAC assignments below the subscription and assignments
   inherited from parent scopes.
 - PIM eligible and active role-assignment schedule instances.
 - Azure deny assignments.
-- Exact actions, not-actions, data actions, and not-data-actions for used roles.
-- Legacy Key Vault access policies and principal resolution.
+- Exact role-definition `Actions` and `NotActions` used for management-plane
+  authorization.
+- Roles that can perform `Microsoft.KeyVault/vaults/write`, flagged because they
+  can modify legacy access policies within their assigned scope.
+- Role assignments containing `DataActions`, isolated in a separate exclusions
+  report so they are not candidates for subscription-scope promotion.
 
 This inventory does not expand transitive Entra group membership or entitlement
 management access-package assignments. Use the exported principal IDs to review
@@ -70,30 +80,42 @@ those identity-governance relationships separately.
 The spreadsheet-oriented output is:
 
 ```text
-16-authorization-review.csv
-17-role-definitions-used.csv
-18-principal-summary.csv
-19-scope-summary.csv
-20-inventory-coverage.csv
-21-inventory-errors.csv
+16-management-plane-access-review.csv
+17-role-definition-classification.csv
+18-management-principal-summary.csv
+19-management-scope-summary.csv
+20-management-inventory-coverage.csv
+21-management-inventory-errors.csv
+22-non-management-rbac-exclusions.csv
 ```
 
-Open `16-authorization-review.csv` in Excel and filter by `ScopeLevel`,
+Open `16-management-plane-access-review.csv` in Excel and filter by `ScopeLevel`,
 `ResourceGroup`, `RoleDefinitionName`, and `PrincipalId`. The blank
 `Proposed*`, `Decision`, owner, approval, and notes columns are the working
-review record. Use `17-role-definitions-used.csv` when a role name alone is not
-enough to determine its effective permissions.
+review record. Use `17-role-definition-classification.csv` when a role name alone
+is not enough to determine its effective control-plane permissions. Do not copy
+rows from `22-non-management-rbac-exclusions.csv` into the new subscriptions
+without a separate data-plane security decision.
 
-Check `20-inventory-coverage.csv` and `21-inventory-errors.csv` before trusting
-the workbook. Investigate every `Failed` or `ReviewRequired` coverage row. The
-command fails after writing its reports if a requested inventory component
-failed. `-AllowPartial` accepts those failures only when a deliberately
-incomplete export is required. `-SkipPim`,
-`-SkipDenyAssignments`, `-SkipKeyVaultAccessPolicies`, and
-`-SkipPrincipalResolution` are explicit scope reductions and are recorded in
-the coverage file.
+`ManagementPlaneOnly` means the role has no direct `DataActions`; it does not
+guarantee that the role cannot affect data-plane access. Treat
+`CanModifyLegacyAccessPolicies=True` as an escalation risk while vaults use the
+legacy access-policy model.
 
-## 1B. Export Key Vault-Only Inventory
+Check `20-management-inventory-coverage.csv` and
+`21-management-inventory-errors.csv` before trusting the workbook. Investigate
+every `Failed` or `ReviewRequired` coverage row. The command fails after writing
+its reports if a requested inventory component failed. `-AllowPartial` accepts
+those failures only when a deliberately incomplete export is required.
+`-SkipPim` and `-SkipDenyAssignments` are explicit scope reductions and are
+recorded in the coverage file.
+
+## Optional Data-Plane Analysis
+
+The following access-policy mapping and staging workflow is retained for future
+analysis. It is not part of the current management-plane subscription work.
+
+### Export Key Vault Legacy Access
 
 ```powershell
 .\scripts\Export-KeyVaultLegacyAccess.ps1 `
@@ -111,7 +133,7 @@ The export script writes:
 04-principal-resolution.csv
 ```
 
-## 2. Resolve mappings
+### Resolve Legacy-to-RBAC Mappings
 
 ```powershell
 .\scripts\Resolve-KeyVaultRbacMapping.ps1 `
@@ -134,7 +156,7 @@ The mapping script writes:
 
 `10-role-assignment-commands.ps1` contains static vault resource IDs and must be regenerated after a resource move. For move-aware and idempotent staging, use the assignment-plan workflow below.
 
-## 3. Build a Move-Aware RBAC Staging Plan
+### Build a Move-Aware Data-Plane RBAC Staging Plan
 
 Copy `config/key-vault-subscription-move-plan.example.csv` to an untracked working file and replace the sample values. The move manifest translates source vault locations to their intended destination subscriptions and resource groups.
 
@@ -149,7 +171,7 @@ After setting `ApprovedBy` on approved rows in `06-role-mapping-proposed.csv`:
 
 For a later cross-tenant reapplication, also supply a principal map based on `config/principal-map.example.csv`.
 
-## 4. Stage RBAC Without Changing the Vault Permission Model
+### Stage Data-Plane RBAC Without Changing the Vault Permission Model
 
 Validate and preview:
 
@@ -173,7 +195,7 @@ Apply approved role assignments:
 
 The script is idempotent and never changes `enableRbacAuthorization`. By default, it skips vaults that already use the Azure RBAC data-plane model.
 
-## 5. Preflight a Same-Tenant Subscription Move
+## 2. Preflight a Same-Tenant Subscription Move
 
 The preflight script is read-only. It checks tenant alignment, target resource-group readiness, provider registration, direct and inherited role assignments, diagnostic settings, private endpoint connections, and optional ARM move validation.
 
@@ -192,7 +214,7 @@ stakeholder review.
 
 See [subscription and tenant sequencing](docs/SUBSCRIPTION-TENANT-SEQUENCING.md) before moving vaults or transferring subscriptions between tenants.
 
-## Review Model
+## Optional Data-Plane Review Model
 
 Mapping statuses are:
 
@@ -209,7 +231,7 @@ Static commands in `10-role-assignment-commands.ps1` are commented by default. `
 
 ## Smoke Test
 
-Run the local mapper test without Azure:
+Run the full local suite without Azure:
 
 ```powershell
 .\tests\Invoke-SmokeTests.ps1

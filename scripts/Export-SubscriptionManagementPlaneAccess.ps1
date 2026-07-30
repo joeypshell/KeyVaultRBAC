@@ -10,10 +10,6 @@ param(
 
     [switch] $SkipDenyAssignments,
 
-    [switch] $SkipKeyVaultAccessPolicies,
-
-    [switch] $SkipPrincipalResolution,
-
     [switch] $AllowPartial
 )
 
@@ -324,6 +320,116 @@ function Get-RolePermissionList {
     return ConvertTo-FlatList $values.ToArray()
 }
 
+function Test-RoleIncludesAction {
+    param(
+        [string] $Actions,
+        [string] $NotActions,
+        [string] $TargetAction
+    )
+
+    $isGranted = @(
+        $Actions -split ';' |
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                $TargetAction -like $_
+            }
+    ).Count -gt 0
+    if (-not $isGranted) {
+        return $false
+    }
+
+    $isExcluded = @(
+        $NotActions -split ';' |
+            Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_) -and
+                $TargetAction -like $_
+            }
+    ).Count -gt 0
+
+    return -not $isExcluded
+}
+
+function Get-RolePlaneMetadata {
+    param([object] $RoleDefinition)
+
+    if (-not $RoleDefinition) {
+        return [pscustomobject]@{
+            AuthorizationPlane             = 'UnknownRoleDefinition'
+            ManagementActions              = ''
+            ManagementNotActions           = ''
+            RoleDataActions                = ''
+            RoleNotDataActions             = ''
+            IncludeInManagementReview      = $true
+            ManagementReviewDisposition    = 'ReviewRoleDefinitionResolution'
+            CanModifyLegacyAccessPolicies  = ''
+            LegacyAccessPolicyRisk          = 'Unknown until the role definition is resolved.'
+        }
+    }
+
+    $managementActions = Get-RolePermissionList `
+        -RoleDefinition $RoleDefinition `
+        -PermissionName 'Actions'
+    $managementNotActions = Get-RolePermissionList `
+        -RoleDefinition $RoleDefinition `
+        -PermissionName 'NotActions'
+    $dataActions = Get-RolePermissionList `
+        -RoleDefinition $RoleDefinition `
+        -PermissionName 'DataActions'
+    $notDataActions = Get-RolePermissionList `
+        -RoleDefinition $RoleDefinition `
+        -PermissionName 'NotDataActions'
+
+    $hasManagementActions = -not [string]::IsNullOrWhiteSpace($managementActions)
+    $hasDataActions = -not [string]::IsNullOrWhiteSpace($dataActions)
+    $canModifyLegacyAccessPolicies = Test-RoleIncludesAction `
+        -Actions $managementActions `
+        -NotActions $managementNotActions `
+        -TargetAction 'Microsoft.KeyVault/vaults/write'
+
+    if ($hasManagementActions -and -not $hasDataActions) {
+        $plane = 'ManagementPlaneOnly'
+        $include = $true
+        $disposition = if ($canModifyLegacyAccessPolicies) {
+            'ReviewLegacyPolicyEscalationRisk'
+        }
+        else {
+            'ReviewForTargetManagementScope'
+        }
+    }
+    elseif ($hasManagementActions -and $hasDataActions) {
+        $plane = 'MixedManagementAndDataPlane'
+        $include = $false
+        $disposition = 'ExcludedContainsDataActions'
+    }
+    elseif ($hasDataActions) {
+        $plane = 'DataPlaneOnly'
+        $include = $false
+        $disposition = 'ExcludedDataPlaneOnly'
+    }
+    else {
+        $plane = 'NoGrantActions'
+        $include = $false
+        $disposition = 'ExcludedNoGrantActions'
+    }
+
+    return [pscustomobject]@{
+        AuthorizationPlane             = $plane
+        ManagementActions              = $managementActions
+        ManagementNotActions           = $managementNotActions
+        RoleDataActions                = $dataActions
+        RoleNotDataActions             = $notDataActions
+        IncludeInManagementReview      = $include
+        ManagementReviewDisposition    = $disposition
+        CanModifyLegacyAccessPolicies  = $canModifyLegacyAccessPolicies
+        LegacyAccessPolicyRisk          = if ($canModifyLegacyAccessPolicies) {
+            'Role can modify vault configuration and therefore legacy access policies within its scope.'
+        }
+        else {
+            ''
+        }
+    }
+}
+
 function Export-CsvRows {
     param(
         [object[]] $Rows,
@@ -416,12 +522,13 @@ New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
 $resolvedOutputPath = (Resolve-Path -LiteralPath $OutputPath).Path
 
 $ownedOutputNames = @(
-    '16-authorization-review.csv',
-    '17-role-definitions-used.csv',
-    '18-principal-summary.csv',
-    '19-scope-summary.csv',
-    '20-inventory-coverage.csv',
-    '21-inventory-errors.csv'
+    '16-management-plane-access-review.csv',
+    '17-role-definition-classification.csv',
+    '18-management-principal-summary.csv',
+    '19-management-scope-summary.csv',
+    '20-management-inventory-coverage.csv',
+    '21-management-inventory-errors.csv',
+    '22-non-management-rbac-exclusions.csv'
 )
 foreach ($name in $ownedOutputNames) {
     $path = Join-Path $resolvedOutputPath $name
@@ -435,18 +542,15 @@ $pimEligibleAssignments = @()
 $pimActiveAssignments = @()
 $denyAssignments = @()
 $roleDefinitions = @()
-$legacyPolicyRows = @()
-$legacyPrincipalRows = @()
 
 try {
     Set-AzContext -Subscription $selectedSubscriptionId -Tenant $selectedTenantId -ErrorAction Stop | Out-Null
 
     try {
-        $underSubscription = @(Get-AzRoleAssignment -IncludeClassicAdministrators -ErrorAction Stop)
+        $underSubscription = @(Get-AzRoleAssignment -ErrorAction Stop)
         $effectiveAtSubscription = @(
             Get-AzRoleAssignment `
                 -Scope $subscriptionScope `
-                -IncludeClassicAdministrators `
                 -ErrorAction Stop
         )
         $activeAssignments = @(
@@ -454,11 +558,11 @@ try {
                 -InputObject @($underSubscription + $effectiveAtSubscription) `
                 -RecordType 'AzureRbacRoleAssignment'
         )
-        Add-Coverage -Component 'ActiveAndClassicRbac' -Status 'Complete' -RecordCount $activeAssignments.Count
+        Add-Coverage -Component 'ActiveRbac' -Status 'Complete' -RecordCount $activeAssignments.Count
     }
     catch {
-        Add-InventoryError -Component 'ActiveAndClassicRbac' -ErrorRecord $_
-        Add-Coverage -Component 'ActiveAndClassicRbac' -Status 'Failed' -RecordCount 0 -Notes $_.Exception.Message
+        Add-InventoryError -Component 'ActiveRbac' -ErrorRecord $_
+        Add-Coverage -Component 'ActiveRbac' -Status 'Failed' -RecordCount 0 -Notes $_.Exception.Message
     }
 
     if ($SkipPim) {
@@ -520,99 +624,6 @@ try {
         Add-Coverage -Component 'RoleDefinitions' -Status 'Failed' -RecordCount 0 -Notes $_.Exception.Message
     }
 
-    if ($SkipKeyVaultAccessPolicies) {
-        Add-Coverage -Component 'LegacyKeyVaultAccessPolicies' -Status 'Skipped' -RecordCount 0
-        Add-Coverage `
-            -Component 'LegacyPrincipalResolution' `
-            -Status 'Skipped' `
-            -RecordCount 0 `
-            -Notes 'Legacy Key Vault access-policy export was skipped.'
-    }
-    else {
-        try {
-            $legacyOutputNames = @(
-                '01-vault-inventory.csv',
-                '02-access-policy-inventory.csv',
-                '03-existing-rbac-inventory.csv',
-                '04-principal-resolution.csv'
-            )
-            foreach ($name in $legacyOutputNames) {
-                $path = Join-Path $resolvedOutputPath $name
-                if (Test-Path -LiteralPath $path) {
-                    Remove-Item -LiteralPath $path -Force
-                }
-            }
-
-            $legacyParameters = @{
-                OutputPath     = $resolvedOutputPath
-                SubscriptionId = @($selectedSubscriptionId)
-            }
-            if (-not $SkipPrincipalResolution) {
-                $legacyParameters.ResolvePrincipals = $true
-            }
-
-            & (Join-Path $PSScriptRoot 'Export-KeyVaultLegacyAccess.ps1') @legacyParameters
-
-            $legacyPolicyPath = Join-Path $resolvedOutputPath '02-access-policy-inventory.csv'
-            if (Test-Path -LiteralPath $legacyPolicyPath) {
-                $legacyPolicyRows = @(Import-Csv -LiteralPath $legacyPolicyPath)
-            }
-            Add-Coverage -Component 'LegacyKeyVaultAccessPolicies' -Status 'Complete' -RecordCount $legacyPolicyRows.Count
-
-            $legacyPrincipalPath = Join-Path $resolvedOutputPath '04-principal-resolution.csv'
-            if (Test-Path -LiteralPath $legacyPrincipalPath) {
-                $legacyPrincipalRows = @(Import-Csv -LiteralPath $legacyPrincipalPath)
-            }
-
-            if ($SkipPrincipalResolution) {
-                Add-Coverage `
-                    -Component 'LegacyPrincipalResolution' `
-                    -Status 'Skipped' `
-                    -RecordCount $legacyPrincipalRows.Count `
-                    -Notes 'Principal IDs were exported without Entra object resolution.'
-            }
-            else {
-                $unresolvedPrincipalCount = @(
-                    $legacyPrincipalRows |
-                        Where-Object { $_.ResolutionStatus -ne 'Resolved' }
-                ).Count
-                $principalResolutionStatus = if ($unresolvedPrincipalCount -gt 0) {
-                    'ReviewRequired'
-                }
-                else {
-                    'Complete'
-                }
-                Add-Coverage `
-                    -Component 'LegacyPrincipalResolution' `
-                    -Status $principalResolutionStatus `
-                    -RecordCount $legacyPrincipalRows.Count `
-                    -Notes (
-                        'Resolved: {0}; unresolved or deleted: {1}. Review 04-principal-resolution.csv.' -f
-                        ($legacyPrincipalRows.Count - $unresolvedPrincipalCount),
-                        $unresolvedPrincipalCount
-                    )
-            }
-        }
-        catch {
-            Add-InventoryError -Component 'LegacyKeyVaultAccessPolicies' -ErrorRecord $_
-            Add-Coverage -Component 'LegacyKeyVaultAccessPolicies' -Status 'Failed' -RecordCount 0 -Notes $_.Exception.Message
-            if ($SkipPrincipalResolution) {
-                Add-Coverage `
-                    -Component 'LegacyPrincipalResolution' `
-                    -Status 'Skipped' `
-                    -RecordCount 0 `
-                    -Notes 'Principal resolution was not requested.'
-            }
-            else {
-                Add-Coverage `
-                    -Component 'LegacyPrincipalResolution' `
-                    -Status 'Failed' `
-                    -RecordCount 0 `
-                    -Notes 'Legacy access-policy export failed before principal resolution could be verified.'
-            }
-        }
-    }
-
     $roleDefinitionByGuid = @{}
     foreach ($roleDefinition in $roleDefinitions) {
         $roleDefinitionGuid = Get-RoleDefinitionGuid (Get-FirstValue -InputObject $roleDefinition -Path @('Name', 'Id'))
@@ -635,6 +646,14 @@ try {
         'RoleDefinitionName',
         'RoleDefinitionId',
         'IsCustomRole',
+        'AuthorizationPlane',
+        'ManagementActions',
+        'ManagementNotActions',
+        'RoleDataActions',
+        'RoleNotDataActions',
+        'CanModifyLegacyAccessPolicies',
+        'LegacyAccessPolicyRisk',
+        'ManagementReviewDisposition',
         'Scope',
         'ScopeLevel',
         'ScopeRelation',
@@ -657,10 +676,6 @@ try {
         'PimAssignmentType',
         'PimMemberType',
         'PimStatus',
-        'KeyPermissions',
-        'SecretPermissions',
-        'CertificatePermissions',
-        'StoragePermissions',
         'DenyActions',
         'DenyNotActions',
         'DenyDataActions',
@@ -734,24 +749,50 @@ try {
             $definition = $roleDefinitionByGuid[$roleGuid.ToLowerInvariant()]
         }
 
+        $planeMetadata = Get-RolePlaneMetadata -RoleDefinition $definition
+
         return [pscustomobject]@{
-            Id       = $roleGuid
-            Name     = if ($definition) {
+            Id                          = $roleGuid
+            Name                        = if ($definition) {
                 [string](Get-FirstValue -InputObject $definition -Path @('RoleName', 'Name'))
             }
             else {
                 $FallbackName
             }
-            IsCustom = if ($definition) {
+            IsCustom                    = if ($definition) {
                 [string](Get-FirstValue -InputObject $definition -Path @('IsCustom'))
             }
             else {
                 ''
             }
+            AuthorizationPlane          = $planeMetadata.AuthorizationPlane
+            ManagementActions           = $planeMetadata.ManagementActions
+            ManagementNotActions        = $planeMetadata.ManagementNotActions
+            RoleDataActions             = $planeMetadata.RoleDataActions
+            RoleNotDataActions          = $planeMetadata.RoleNotDataActions
+            CanModifyLegacyAccessPolicies = $planeMetadata.CanModifyLegacyAccessPolicies
+            LegacyAccessPolicyRisk       = $planeMetadata.LegacyAccessPolicyRisk
+            IncludeInManagementReview   = $planeMetadata.IncludeInManagementReview
+            ManagementReviewDisposition = $planeMetadata.ManagementReviewDisposition
         }
     }
 
     $reviewRows = New-Object System.Collections.Generic.List[object]
+    $excludedRows = New-Object System.Collections.Generic.List[object]
+
+    function Add-ClassifiedRoleRow {
+        param(
+            [object] $Row,
+            [object] $RoleDetails
+        )
+
+        if ($RoleDetails.IncludeInManagementReview) {
+            $reviewRows.Add($Row)
+        }
+        else {
+            $excludedRows.Add($Row)
+        }
+    }
 
     foreach ($assignment in $activeAssignments) {
         $scope = [string](Get-FirstValue -InputObject $assignment -Path @('Scope'))
@@ -759,7 +800,7 @@ try {
             -RoleDefinitionId (Get-FirstValue -InputObject $assignment -Path @('RoleDefinitionId')) `
             -FallbackName ([string](Get-FirstValue -InputObject $assignment -Path @('RoleDefinitionName')))
 
-        $reviewRows.Add((New-ReviewRow -Values @{
+        $row = New-ReviewRow -Values @{
             RecordType          = 'AzureRbacRoleAssignment'
             AssignmentState     = 'Active'
             PrincipalId         = [string](Get-FirstValue -InputObject $assignment -Path @('ObjectId', 'PrincipalId'))
@@ -769,13 +810,22 @@ try {
             RoleDefinitionName  = $roleDetails.Name
             RoleDefinitionId    = $roleDetails.Id
             IsCustomRole        = $roleDetails.IsCustom
+            AuthorizationPlane  = $roleDetails.AuthorizationPlane
+            ManagementActions   = $roleDetails.ManagementActions
+            ManagementNotActions = $roleDetails.ManagementNotActions
+            RoleDataActions     = $roleDetails.RoleDataActions
+            RoleNotDataActions  = $roleDetails.RoleNotDataActions
+            CanModifyLegacyAccessPolicies = $roleDetails.CanModifyLegacyAccessPolicies
+            LegacyAccessPolicyRisk = $roleDetails.LegacyAccessPolicyRisk
+            ManagementReviewDisposition = $roleDetails.ManagementReviewDisposition
             Scope               = if ($scope) { $scope } else { $subscriptionScope }
             AssignmentId        = [string](Get-FirstValue -InputObject $assignment -Path @('RoleAssignmentId', 'Id'))
             ConditionVersion    = [string](Get-FirstValue -InputObject $assignment -Path @('ConditionVersion'))
             Condition           = [string](Get-FirstValue -InputObject $assignment -Path @('Condition'))
             Description         = [string](Get-FirstValue -InputObject $assignment -Path @('Description'))
             CanDelegate         = [string](Get-FirstValue -InputObject $assignment -Path @('CanDelegate'))
-        }))
+        }
+        Add-ClassifiedRoleRow -Row $row -RoleDetails $roleDetails
     }
 
     foreach ($assignment in $pimEligibleAssignments) {
@@ -785,7 +835,7 @@ try {
                 'ExpandedProperties.RoleDefinition.DisplayName'
             )))
 
-        $reviewRows.Add((New-ReviewRow -Values @{
+        $row = New-ReviewRow -Values @{
             RecordType          = 'AzurePimEligibility'
             AssignmentState     = 'Eligible'
             PrincipalId         = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalId'))
@@ -796,6 +846,14 @@ try {
             RoleDefinitionName  = $roleDetails.Name
             RoleDefinitionId    = $roleDetails.Id
             IsCustomRole        = $roleDetails.IsCustom
+            AuthorizationPlane  = $roleDetails.AuthorizationPlane
+            ManagementActions   = $roleDetails.ManagementActions
+            ManagementNotActions = $roleDetails.ManagementNotActions
+            RoleDataActions     = $roleDetails.RoleDataActions
+            RoleNotDataActions  = $roleDetails.RoleNotDataActions
+            CanModifyLegacyAccessPolicies = $roleDetails.CanModifyLegacyAccessPolicies
+            LegacyAccessPolicyRisk = $roleDetails.LegacyAccessPolicyRisk
+            ManagementReviewDisposition = $roleDetails.ManagementReviewDisposition
             Scope               = [string](Get-FirstValue -InputObject $assignment -Path @('Scope'))
             AssignmentId        = [string](Get-FirstValue -InputObject $assignment -Path @('Id', 'Name'))
             StartDateTime       = [string](Get-FirstValue -InputObject $assignment -Path @('StartDateTime'))
@@ -803,7 +861,8 @@ try {
             PimAssignmentType   = [string](Get-FirstValue -InputObject $assignment -Path @('AssignmentType'))
             PimMemberType       = [string](Get-FirstValue -InputObject $assignment -Path @('MemberType'))
             PimStatus           = [string](Get-FirstValue -InputObject $assignment -Path @('Status'))
-        }))
+        }
+        Add-ClassifiedRoleRow -Row $row -RoleDetails $roleDetails
     }
 
     foreach ($assignment in $pimActiveAssignments) {
@@ -813,7 +872,7 @@ try {
                 'ExpandedProperties.RoleDefinition.DisplayName'
             )))
 
-        $reviewRows.Add((New-ReviewRow -Values @{
+        $row = New-ReviewRow -Values @{
             RecordType          = 'AzurePimAssignment'
             AssignmentState     = 'PimActiveSchedule'
             PrincipalId         = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalId'))
@@ -824,6 +883,14 @@ try {
             RoleDefinitionName  = $roleDetails.Name
             RoleDefinitionId    = $roleDetails.Id
             IsCustomRole        = $roleDetails.IsCustom
+            AuthorizationPlane  = $roleDetails.AuthorizationPlane
+            ManagementActions   = $roleDetails.ManagementActions
+            ManagementNotActions = $roleDetails.ManagementNotActions
+            RoleDataActions     = $roleDetails.RoleDataActions
+            RoleNotDataActions  = $roleDetails.RoleNotDataActions
+            CanModifyLegacyAccessPolicies = $roleDetails.CanModifyLegacyAccessPolicies
+            LegacyAccessPolicyRisk = $roleDetails.LegacyAccessPolicyRisk
+            ManagementReviewDisposition = $roleDetails.ManagementReviewDisposition
             Scope               = [string](Get-FirstValue -InputObject $assignment -Path @('Scope'))
             AssignmentId        = [string](Get-FirstValue -InputObject $assignment -Path @('Id', 'Name'))
             StartDateTime       = [string](Get-FirstValue -InputObject $assignment -Path @('StartDateTime'))
@@ -831,7 +898,8 @@ try {
             PimAssignmentType   = [string](Get-FirstValue -InputObject $assignment -Path @('AssignmentType'))
             PimMemberType       = [string](Get-FirstValue -InputObject $assignment -Path @('MemberType'))
             PimStatus           = [string](Get-FirstValue -InputObject $assignment -Path @('Status'))
-        }))
+        }
+        Add-ClassifiedRoleRow -Row $row -RoleDetails $roleDetails
     }
 
     foreach ($assignment in $denyAssignments) {
@@ -867,11 +935,41 @@ try {
             }
         }
 
-        $reviewRows.Add((New-ReviewRow -Values @{
+        $denyActionsText = ConvertTo-FlatList $denyActions.ToArray()
+        $denyNotActionsText = ConvertTo-FlatList $denyNotActions.ToArray()
+        $denyDataActionsText = ConvertTo-FlatList $denyDataActions.ToArray()
+        $denyNotDataActionsText = ConvertTo-FlatList $denyNotDataActions.ToArray()
+        $hasManagementDeny = -not [string]::IsNullOrWhiteSpace($denyActionsText)
+        $hasDataDeny = -not [string]::IsNullOrWhiteSpace($denyDataActionsText)
+
+        if ($hasManagementDeny -and $hasDataDeny) {
+            $denyPlane = 'MixedManagementAndDataPlane'
+            $includeDeny = $true
+            $denyDisposition = 'ReviewManagementDenyContainsDataActions'
+        }
+        elseif ($hasManagementDeny) {
+            $denyPlane = 'ManagementPlaneOnly'
+            $includeDeny = $true
+            $denyDisposition = 'ReviewManagementDeny'
+        }
+        elseif ($hasDataDeny) {
+            $denyPlane = 'DataPlaneOnly'
+            $includeDeny = $false
+            $denyDisposition = 'ExcludedDataPlaneOnly'
+        }
+        else {
+            $denyPlane = 'UnknownPermissions'
+            $includeDeny = $true
+            $denyDisposition = 'ReviewDenyPermissionResolution'
+        }
+
+        $row = New-ReviewRow -Values @{
             RecordType                   = 'AzureDenyAssignment'
             AssignmentState              = 'Deny'
             PrincipalId                  = ConvertTo-FlatList $principalIds
             RoleDefinitionName           = 'Deny Assignment'
+            AuthorizationPlane           = $denyPlane
+            ManagementReviewDisposition  = $denyDisposition
             Scope                        = [string](Get-FirstValue -InputObject $assignment -Path @('Scope'))
             AssignmentId                 = [string](Get-FirstValue -InputObject $assignment -Path @(
                 'DenyAssignmentId',
@@ -879,10 +977,10 @@ try {
                 'Name'
             ))
             Description                  = [string](Get-FirstValue -InputObject $assignment -Path @('Description'))
-            DenyActions                  = ConvertTo-FlatList $denyActions.ToArray()
-            DenyNotActions               = ConvertTo-FlatList $denyNotActions.ToArray()
-            DenyDataActions              = ConvertTo-FlatList $denyDataActions.ToArray()
-            DenyNotDataActions           = ConvertTo-FlatList $denyNotDataActions.ToArray()
+            DenyActions                  = $denyActionsText
+            DenyNotActions               = $denyNotActionsText
+            DenyDataActions              = $denyDataActionsText
+            DenyNotDataActions           = $denyNotDataActionsText
             DenyExcludePrincipals        = ConvertTo-FlatList $excludedPrincipalIds
             DenyDoNotApplyToChildScopes  = [string](Get-FirstValue -InputObject $assignment -Path @(
                 'DoNotApplyToChildScopes'
@@ -892,34 +990,17 @@ try {
             ))
             TenantTransferImpact         = 'ReviewAndRecreateIfRequired'
             ReviewReason                 = 'Review separately: deny assignments can override role grants and may be system managed.'
-        }))
-    }
-
-    foreach ($policy in $legacyPolicyRows) {
-        $rbacEnabled = [string]$policy.EnableRbacAuthorization -ieq 'true'
-        $reviewRows.Add((New-ReviewRow -Values @{
-            RecordType             = 'KeyVaultAccessPolicy'
-            AssignmentState        = if ($rbacEnabled) { 'LegacyConfiguredInactive' } else { 'LegacyActive' }
-            PrincipalId            = [string]$policy.PrincipalObjectId
-            PrincipalType          = [string]$policy.PrincipalType
-            PrincipalDisplayName   = [string]$policy.PrincipalDisplayName
-            PrincipalAppId         = [string]$policy.PrincipalAppId
-            RoleDefinitionName     = 'Legacy Key Vault Access Policy'
-            Scope                  = [string]$policy.VaultId
-            AssignmentId           = "legacy|$($policy.VaultId)|$($policy.PrincipalObjectId)|$($policy.ApplicationId)"
-            Description            = [string]$policy.PermissionSignature
-            KeyPermissions         = [string]$policy.KeyPermissions
-            SecretPermissions      = [string]$policy.SecretPermissions
-            CertificatePermissions = [string]$policy.CertificatePermissions
-            StoragePermissions     = [string]$policy.StoragePermissions
-            SameTenantMoveImpact   = 'MovesWithVaultConfiguration'
-            TenantTransferImpact   = 'UpdateVaultTenantAndRemapPolicy'
-            ReviewReason           = 'Map these data-plane permissions to approved RBAC intent or explicitly retain the legacy policy.'
-        }))
+        }
+        if ($includeDeny) {
+            $reviewRows.Add($row)
+        }
+        else {
+            $excludedRows.Add($row)
+        }
     }
 
     $usedRoleDefinitionIds = @(
-        $reviewRows |
+        @($reviewRows.ToArray() + $excludedRows.ToArray()) |
             ForEach-Object { $_.RoleDefinitionId } |
             Where-Object { $_ } |
             Sort-Object -Unique
@@ -929,6 +1010,10 @@ try {
         'RoleDefinitionId',
         'RoleName',
         'IsCustom',
+        'AuthorizationPlane',
+        'CanModifyLegacyAccessPolicies',
+        'LegacyAccessPolicyRisk',
+        'ManagementReviewDisposition',
         'Description',
         'Actions',
         'NotActions',
@@ -944,17 +1029,22 @@ try {
         }
 
         $definition = $roleDefinitionByGuid[$roleDefinitionId.ToLowerInvariant()]
+        $planeMetadata = Get-RolePlaneMetadata -RoleDefinition $definition
         $roleDefinitionRows.Add([pscustomobject]@{
-            RoleDefinitionId = $roleDefinitionId
-            RoleName         = [string](Get-FirstValue -InputObject $definition -Path @('RoleName', 'Name'))
-            IsCustom         = [string](Get-FirstValue -InputObject $definition -Path @('IsCustom'))
-            Description      = [string](Get-FirstValue -InputObject $definition -Path @('Description'))
-            Actions          = Get-RolePermissionList -RoleDefinition $definition -PermissionName 'Actions'
-            NotActions       = Get-RolePermissionList -RoleDefinition $definition -PermissionName 'NotActions'
-            DataActions      = Get-RolePermissionList -RoleDefinition $definition -PermissionName 'DataActions'
-            NotDataActions   = Get-RolePermissionList -RoleDefinition $definition -PermissionName 'NotDataActions'
-            AssignableScopes = ConvertTo-FlatList (Get-FirstValue -InputObject $definition -Path @('AssignableScopes'))
-            PermissionsJson  = ConvertTo-CompactJson (Get-FirstValue -InputObject $definition -Path @('Permissions'))
+            RoleDefinitionId             = $roleDefinitionId
+            RoleName                     = [string](Get-FirstValue -InputObject $definition -Path @('RoleName', 'Name'))
+            IsCustom                     = [string](Get-FirstValue -InputObject $definition -Path @('IsCustom'))
+            AuthorizationPlane           = $planeMetadata.AuthorizationPlane
+            CanModifyLegacyAccessPolicies = $planeMetadata.CanModifyLegacyAccessPolicies
+            LegacyAccessPolicyRisk        = $planeMetadata.LegacyAccessPolicyRisk
+            ManagementReviewDisposition  = $planeMetadata.ManagementReviewDisposition
+            Description                  = [string](Get-FirstValue -InputObject $definition -Path @('Description'))
+            Actions                      = $planeMetadata.ManagementActions
+            NotActions                   = $planeMetadata.ManagementNotActions
+            DataActions                  = $planeMetadata.RoleDataActions
+            NotDataActions               = $planeMetadata.RoleNotDataActions
+            AssignableScopes             = ConvertTo-FlatList (Get-FirstValue -InputObject $definition -Path @('AssignableScopes'))
+            PermissionsJson              = ConvertTo-CompactJson (Get-FirstValue -InputObject $definition -Path @('Permissions'))
         })
     }
 
@@ -964,12 +1054,12 @@ try {
         'PrincipalDisplayName',
         'PrincipalSignInName',
         'PrincipalAppId',
-        'TotalAuthorizationRecords',
+        'TotalManagementPlaneRecords',
         'ActiveRbacCount',
         'PimEligibleCount',
         'PimActiveCount',
-        'LegacyPolicyCount',
         'DenyAssignmentCount',
+        'UnknownRoleDefinitionCount',
         'TargetTenantPrincipalId',
         'Owner',
         'Disposition',
@@ -990,12 +1080,12 @@ try {
                     PrincipalDisplayName     = [string]$row.PrincipalDisplayName
                     PrincipalSignInName      = [string]$row.PrincipalSignInName
                     PrincipalAppId           = [string]$row.PrincipalAppId
-                    TotalAuthorizationRecords = 0
+                    TotalManagementPlaneRecords = 0
                     ActiveRbacCount          = 0
                     PimEligibleCount         = 0
                     PimActiveCount           = 0
-                    LegacyPolicyCount        = 0
                     DenyAssignmentCount      = 0
+                    UnknownRoleDefinitionCount = 0
                     TargetTenantPrincipalId  = ''
                     Owner                    = ''
                     Disposition              = ''
@@ -1004,7 +1094,7 @@ try {
             }
 
             $principal = $principalIndex[$key]
-            $principal.TotalAuthorizationRecords++
+            $principal.TotalManagementPlaneRecords++
             if (-not $principal.PrincipalType -and $row.PrincipalType) {
                 $principal.PrincipalType = [string]$row.PrincipalType
             }
@@ -1022,8 +1112,10 @@ try {
                 'AzureRbacRoleAssignment' { $principal.ActiveRbacCount++ }
                 'AzurePimEligibility' { $principal.PimEligibleCount++ }
                 'AzurePimAssignment' { $principal.PimActiveCount++ }
-                'KeyVaultAccessPolicy' { $principal.LegacyPolicyCount++ }
                 'AzureDenyAssignment' { $principal.DenyAssignmentCount++ }
+            }
+            if ($row.AuthorizationPlane -eq 'UnknownRoleDefinition') {
+                $principal.UnknownRoleDefinitionCount++
             }
         }
     }
@@ -1038,6 +1130,8 @@ try {
         'AssignmentState',
         'ScopeLevel',
         'RoleDefinitionName',
+        'AuthorizationPlane',
+        'ManagementReviewDisposition',
         'AssignmentCount',
         'UniquePrincipalCount',
         'ResourceGroupCount',
@@ -1045,7 +1139,7 @@ try {
     )
     $scopeSummaryRows = @(
         $reviewRows |
-            Group-Object -Property RecordType, AssignmentState, ScopeLevel, RoleDefinitionName |
+            Group-Object -Property RecordType, AssignmentState, ScopeLevel, RoleDefinitionName, AuthorizationPlane, ManagementReviewDisposition |
             ForEach-Object {
                 $first = $_.Group[0]
                 [pscustomobject]@{
@@ -1053,6 +1147,8 @@ try {
                     AssignmentState     = $first.AssignmentState
                     ScopeLevel          = $first.ScopeLevel
                     RoleDefinitionName  = $first.RoleDefinitionName
+                    AuthorizationPlane  = $first.AuthorizationPlane
+                    ManagementReviewDisposition = $first.ManagementReviewDisposition
                     AssignmentCount     = $_.Count
                     UniquePrincipalCount = @(
                         $_.Group.PrincipalId |
@@ -1070,33 +1166,65 @@ try {
             Sort-Object RecordType, ScopeLevel, RoleDefinitionName
     )
 
+    $unknownRoleCount = @(
+        $reviewRows |
+            Where-Object { $_.AuthorizationPlane -in @('UnknownRoleDefinition', 'UnknownPermissions') }
+    ).Count
+    $classificationStatus = if ($unknownRoleCount -gt 0) {
+        'ReviewRequired'
+    }
+    else {
+        'Complete'
+    }
+    Add-Coverage `
+        -Component 'ManagementPlaneClassification' `
+        -Status $classificationStatus `
+        -RecordCount $reviewRows.Count `
+        -Notes "Unknown role or deny definitions requiring review: $unknownRoleCount."
+
+    $exclusionSummary = @(
+        $excludedRows |
+            Group-Object -Property AuthorizationPlane |
+            Sort-Object Name |
+            ForEach-Object { "$($_.Name):$($_.Count)" }
+    ) -join '; '
+    Add-Coverage `
+        -Component 'NonManagementRbacExclusions' `
+        -Status 'ExcludedByDesign' `
+        -RecordCount $excludedRows.Count `
+        -Notes $exclusionSummary
+
     $coverageHeaders = @('Component', 'Status', 'RecordCount', 'Notes')
     $errorHeaders = @('Component', 'ExceptionType', 'Message')
 
     Export-CsvRows `
         -Rows $reviewRows.ToArray() `
         -Headers $reviewHeaders `
-        -Path (Join-Path $resolvedOutputPath '16-authorization-review.csv')
+        -Path (Join-Path $resolvedOutputPath '16-management-plane-access-review.csv')
     Export-CsvRows `
         -Rows $roleDefinitionRows.ToArray() `
         -Headers $roleDefinitionHeaders `
-        -Path (Join-Path $resolvedOutputPath '17-role-definitions-used.csv')
+        -Path (Join-Path $resolvedOutputPath '17-role-definition-classification.csv')
     Export-CsvRows `
         -Rows $principalRows `
         -Headers $principalHeaders `
-        -Path (Join-Path $resolvedOutputPath '18-principal-summary.csv')
+        -Path (Join-Path $resolvedOutputPath '18-management-principal-summary.csv')
     Export-CsvRows `
         -Rows $scopeSummaryRows `
         -Headers $scopeSummaryHeaders `
-        -Path (Join-Path $resolvedOutputPath '19-scope-summary.csv')
+        -Path (Join-Path $resolvedOutputPath '19-management-scope-summary.csv')
     Export-CsvRows `
         -Rows $script:CoverageRows.ToArray() `
         -Headers $coverageHeaders `
-        -Path (Join-Path $resolvedOutputPath '20-inventory-coverage.csv')
+        -Path (Join-Path $resolvedOutputPath '20-management-inventory-coverage.csv')
     Export-CsvRows `
         -Rows $script:InventoryErrors.ToArray() `
         -Headers $errorHeaders `
-        -Path (Join-Path $resolvedOutputPath '21-inventory-errors.csv')
+        -Path (Join-Path $resolvedOutputPath '21-management-inventory-errors.csv')
+    Export-CsvRows `
+        -Rows $excludedRows.ToArray() `
+        -Headers $reviewHeaders `
+        -Path (Join-Path $resolvedOutputPath '22-non-management-rbac-exclusions.csv')
 }
 finally {
     if ($originalContext) {
@@ -1111,12 +1239,13 @@ finally {
 
 $failedCoverage = @($script:CoverageRows | Where-Object { $_.Status -eq 'Failed' })
 Write-Host (
-    "Authorization inventory complete. Review rows: {0}; Coverage failures: {1}; Output: {2}" -f
+    "Management-plane inventory complete. Review rows: {0}; Excluded non-management rows: {1}; Coverage failures: {2}; Output: {3}" -f
     $reviewRows.Count,
+    $excludedRows.Count,
     $failedCoverage.Count,
     $resolvedOutputPath
 )
 
 if ($failedCoverage.Count -gt 0 -and -not $AllowPartial) {
-    throw "Authorization inventory is incomplete. Review 20-inventory-coverage.csv and 21-inventory-errors.csv, then rerun or use -AllowPartial to accept a partial export."
+    throw "Management-plane inventory is incomplete. Review 20-management-inventory-coverage.csv and 21-management-inventory-errors.csv, then rerun or use -AllowPartial to accept a partial export."
 }

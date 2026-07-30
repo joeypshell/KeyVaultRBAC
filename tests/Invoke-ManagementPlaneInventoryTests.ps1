@@ -4,11 +4,13 @@ param()
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$testOutputPath = Join-Path $repoRoot 'tests\out\authorization'
+$testOutputPath = Join-Path $repoRoot 'tests\out\management-plane'
 $subscriptionId = '00000000-0000-0000-0000-000000000001'
 $tenantId = '11111111-1111-1111-1111-111111111111'
 $readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 $secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+$keyVaultContributorRoleId = 'f25e0fa2-a7c8-4377-a976-54943a77a395'
+$unknownRoleId = '77777777-7777-7777-7777-777777777777'
 $subscriptionScope = "/subscriptions/$subscriptionId"
 $resourceGroupScope = "$subscriptionScope/resourceGroups/rg-dev"
 $vaultScope = "$resourceGroupScope/providers/Microsoft.KeyVault/vaults/kv-dev"
@@ -48,18 +50,18 @@ $global:KeyVaultRbacAuthorizationTestAssignments = @(
         Scope              = $resourceGroupScope
         ObjectId           = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
         ObjectType         = 'Group'
-        DisplayName        = 'Dev Secret Readers'
-        RoleDefinitionId   = $secretsUserRoleId
-        RoleDefinitionName = 'Key Vault Secrets User'
+        DisplayName        = 'Dev Resource Readers'
+        RoleDefinitionId   = $readerRoleId
+        RoleDefinitionName = 'Reader'
     },
     [pscustomobject]@{
         RoleAssignmentId   = "$vaultScope/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000104"
         Scope              = $vaultScope
         ObjectId           = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
         ObjectType         = 'ServicePrincipal'
-        DisplayName        = 'Dev Application'
-        RoleDefinitionId   = $secretsUserRoleId
-        RoleDefinitionName = 'Key Vault Secrets User'
+        DisplayName        = 'Vault Management Automation'
+        RoleDefinitionId   = $keyVaultContributorRoleId
+        RoleDefinitionName = 'Key Vault Contributor'
     },
     [pscustomobject]@{
         RoleAssignmentId   = "$secretScope/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000105"
@@ -70,6 +72,15 @@ $global:KeyVaultRbacAuthorizationTestAssignments = @(
         SignInName         = 'exception@example.invalid'
         RoleDefinitionId   = $secretsUserRoleId
         RoleDefinitionName = 'Key Vault Secrets User'
+    },
+    [pscustomobject]@{
+        RoleAssignmentId   = "$vaultScope/providers/Microsoft.Authorization/roleAssignments/00000000-0000-0000-0000-000000000109"
+        Scope              = $vaultScope
+        ObjectId           = '12121212-1212-1212-1212-121212121212'
+        ObjectType         = 'Group'
+        DisplayName        = 'Unresolved Custom Role Group'
+        RoleDefinitionId   = $unknownRoleId
+        RoleDefinitionName = 'Unresolved Custom Management Role'
     }
 )
 
@@ -97,12 +108,27 @@ $global:KeyVaultRbacAuthorizationTestRoleDefinitions = @(
         AssignableScopes = @('/')
         Permissions      = @(
             [pscustomobject]@{
-                Actions        = @()
+                Actions        = @('Microsoft.Resources/subscriptions/resourceGroups/read')
                 NotActions     = @()
                 DataActions    = @(
                     'Microsoft.KeyVault/vaults/secrets/getSecret/action',
                     'Microsoft.KeyVault/vaults/secrets/readMetadata/action'
                 )
+                NotDataActions = @()
+            }
+        )
+    },
+    [pscustomobject]@{
+        Name             = $keyVaultContributorRoleId
+        RoleName         = 'Key Vault Contributor'
+        IsCustom         = $false
+        Description      = 'Manage vault resources without accessing vault data.'
+        AssignableScopes = @('/')
+        Permissions      = @(
+            [pscustomobject]@{
+                Actions        = @('Microsoft.KeyVault/vaults/*')
+                NotActions     = @()
+                DataActions    = @()
                 NotDataActions = @()
             }
         )
@@ -160,7 +186,6 @@ function Set-AzContext {
 function Get-AzRoleAssignment {
     param(
         [string] $Scope,
-        [switch] $IncludeClassicAdministrators,
         [object] $ErrorAction
     )
 
@@ -243,15 +268,20 @@ function Get-AzDenyAssignment {
     return $global:KeyVaultRbacAuthorizationTestDenyAssignment
 }
 
-& (Join-Path $repoRoot 'scripts\Export-SubscriptionAuthorizationInventory.ps1') `
+& (Join-Path $repoRoot 'scripts\Export-SubscriptionManagementPlaneAccess.ps1') `
     -SubscriptionId $subscriptionId `
-    -OutputPath $testOutputPath `
-    -SkipKeyVaultAccessPolicies
+    -OutputPath $testOutputPath
 
-$reviewPath = Join-Path $testOutputPath '16-authorization-review.csv'
+$reviewPath = Join-Path $testOutputPath '16-management-plane-access-review.csv'
 $reviewRows = @(Import-Csv -LiteralPath $reviewPath)
-if ($reviewRows.Count -ne 8) {
-    throw "Expected eight authorization review rows, got $($reviewRows.Count)."
+if ($reviewRows.Count -ne 7) {
+    throw "Expected seven management-plane review rows, got $($reviewRows.Count)."
+}
+$excludedRows = @(
+    Import-Csv -LiteralPath (Join-Path $testOutputPath '22-non-management-rbac-exclusions.csv')
+)
+if ($excludedRows.Count -ne 2) {
+    throw "Expected two non-management exclusions, got $($excludedRows.Count)."
 }
 
 $managementGroupRow = $reviewRows |
@@ -296,8 +326,20 @@ if ($vaultRow.ScopeLevel -ne 'KeyVault') {
 if ($vaultRow.SameTenantMoveImpact -ne 'DirectAssignmentDoesNotMove') {
     throw "Vault move impact was '$($vaultRow.SameTenantMoveImpact)'."
 }
+if ($vaultRow.CanModifyLegacyAccessPolicies -ne 'True') {
+    throw 'Key Vault Contributor was not flagged as able to modify legacy access policies.'
+}
+if ($vaultRow.ManagementReviewDisposition -ne 'ReviewLegacyPolicyEscalationRisk') {
+    throw 'Legacy access-policy escalation risk did not change the review disposition.'
+}
+$unknownRoleRow = $reviewRows |
+    Where-Object { $_.RoleDefinitionId -eq $unknownRoleId } |
+    Select-Object -First 1
+if ($unknownRoleRow.AuthorizationPlane -ne 'UnknownRoleDefinition') {
+    throw 'Unresolved role definition was not retained for management review.'
+}
 
-$secretRow = $reviewRows |
+$secretRow = $excludedRows |
     Where-Object { $_.Scope -eq $secretScope } |
     Select-Object -First 1
 if ($secretRow.ScopeLevel -ne 'KeyVaultObject') {
@@ -306,12 +348,24 @@ if ($secretRow.ScopeLevel -ne 'KeyVaultObject') {
 if ($secretRow.KeyVaultObjectType -ne 'secrets' -or $secretRow.KeyVaultObjectName -ne 'api-key') {
     throw 'Secret object scope details were not parsed correctly.'
 }
+if ($secretRow.AuthorizationPlane -ne 'MixedManagementAndDataPlane') {
+    throw "Secret role plane was '$($secretRow.AuthorizationPlane)'."
+}
+if ($secretRow.ManagementReviewDisposition -ne 'ExcludedContainsDataActions') {
+    throw 'Data-plane-bearing role was not excluded from management review.'
+}
 
 $pimEligibleRow = $reviewRows |
     Where-Object { $_.RecordType -eq 'AzurePimEligibility' } |
     Select-Object -First 1
 if ($pimEligibleRow.AssignmentState -ne 'Eligible') {
     throw 'PIM eligibility was not included in the authorization review.'
+}
+$pimActiveExcludedRow = $excludedRows |
+    Where-Object { $_.RecordType -eq 'AzurePimAssignment' } |
+    Select-Object -First 1
+if (-not $pimActiveExcludedRow) {
+    throw 'Data-plane-bearing PIM assignment was not written to the exclusions report.'
 }
 
 $denyRow = $reviewRows |
@@ -321,9 +375,11 @@ if ($denyRow.DenyActions -ne 'Microsoft.KeyVault/vaults/delete') {
     throw "Deny actions were '$($denyRow.DenyActions)'."
 }
 
-$roleDefinitionRows = @(Import-Csv -LiteralPath (Join-Path $testOutputPath '17-role-definitions-used.csv'))
-if ($roleDefinitionRows.Count -ne 2) {
-    throw "Expected two used role definitions, got $($roleDefinitionRows.Count)."
+$roleDefinitionRows = @(
+    Import-Csv -LiteralPath (Join-Path $testOutputPath '17-role-definition-classification.csv')
+)
+if ($roleDefinitionRows.Count -ne 3) {
+    throw "Expected three used role definitions, got $($roleDefinitionRows.Count)."
 }
 $secretsRole = $roleDefinitionRows |
     Where-Object { $_.RoleDefinitionId -eq $secretsUserRoleId } |
@@ -331,8 +387,13 @@ $secretsRole = $roleDefinitionRows |
 if ($secretsRole.DataActions -notlike '*getSecret/action*') {
     throw 'Role-definition data actions were not exported.'
 }
+if ($secretsRole.AuthorizationPlane -ne 'MixedManagementAndDataPlane') {
+    throw "Secrets role plane was '$($secretsRole.AuthorizationPlane)'."
+}
 
-$coverageRows = @(Import-Csv -LiteralPath (Join-Path $testOutputPath '20-inventory-coverage.csv'))
+$coverageRows = @(
+    Import-Csv -LiteralPath (Join-Path $testOutputPath '20-management-inventory-coverage.csv')
+)
 if (@($coverageRows | Where-Object { $_.Status -eq 'Failed' }).Count -gt 0) {
     throw 'Authorization inventory coverage reported an unexpected failure.'
 }
@@ -340,23 +401,12 @@ if (
     -not (
         $coverageRows |
             Where-Object {
-                $_.Component -eq 'LegacyKeyVaultAccessPolicies' -and
-                $_.Status -eq 'Skipped'
+                $_.Component -eq 'ManagementPlaneClassification' -and
+                $_.Status -eq 'ReviewRequired'
             }
     )
 ) {
-    throw 'Skipped legacy access-policy coverage was not recorded.'
-}
-if (
-    -not (
-        $coverageRows |
-            Where-Object {
-                $_.Component -eq 'LegacyPrincipalResolution' -and
-                $_.Status -eq 'Skipped'
-            }
-    )
-) {
-    throw 'Skipped legacy principal-resolution coverage was not recorded.'
+    throw 'Unknown role definition did not set management classification to ReviewRequired.'
 }
 
-Write-Host "Authorization inventory tests passed. Output: $testOutputPath"
+Write-Host "Management-plane inventory tests passed. Output: $testOutputPath"

@@ -222,6 +222,6 @@ if ($global:KeyVaultRbacSmokeGraphCalls[1].First -ne 1 -or $global:KeyVaultRbacS
 }
 Remove-Variable -Scope Global -Name KeyVaultRbacSmokeGraphCalls -ErrorAction SilentlyContinue
 
-& (Join-Path $repoRoot 'tests\Invoke-AuthorizationInventoryTests.ps1')
+& (Join-Path $repoRoot 'tests\Invoke-ManagementPlaneInventoryTests.ps1')
 
 Write-Host "Smoke tests passed. Output: $testOut"
