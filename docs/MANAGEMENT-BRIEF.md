@@ -154,6 +154,12 @@ validated change, not the primary rollback mechanism.
 - `13-subscription-move-preflight.csv`
 - `14-role-assignments-to-recreate.csv`
 - `15-parent-scope-role-delta.csv`
+- `16-authorization-review.csv`
+- `17-role-definitions-used.csv`
+- `18-principal-summary.csv`
+- `19-scope-summary.csv`
+- `20-inventory-coverage.csv`
+- `21-inventory-errors.csv`
 - Successful ARM move validation
 - Application owner test plan
 - Monitoring and dependency baseline
@@ -167,6 +173,8 @@ Ready:
 - Move-aware RBAC assignment planning.
 - Read-only subscription-move preflight.
 - Idempotent RBAC assignment validation and apply workflow.
+- Subscription-wide authorization export with scope classification, PIM,
+  deny-assignment, role-definition, principal, and coverage reports.
 - Local smoke tests, including Resource Graph pagination beyond 1,000 records.
 - Written subscription and tenant sequencing runbook.
 

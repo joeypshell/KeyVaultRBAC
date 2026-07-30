@@ -13,6 +13,7 @@ The scripts do not enable RBAC on any vault. They inventory current state, class
 ## Files
 
 ```text
+scripts/Export-SubscriptionAuthorizationInventory.ps1
 scripts/Export-KeyVaultLegacyAccess.ps1
 scripts/Resolve-KeyVaultRbacMapping.ps1
 scripts/New-KeyVaultRbacStagingPlan.ps1
@@ -26,6 +27,7 @@ config/principal-map.example.csv
 docs/MANAGEMENT-BRIEF.md
 docs/SUBSCRIPTION-TENANT-SEQUENCING.md
 tests/Invoke-SmokeTests.ps1
+tests/Invoke-AuthorizationInventoryTests.ps1
 tests/fixtures/02-access-policy-inventory.csv
 ```
 
@@ -41,7 +43,57 @@ Connect-AzAccount
 Optional identity enrichment uses `Get-AzADUser`, `Get-AzADServicePrincipal`, and `Get-AzADGroup` from `Az.Resources`.
 Install `Az.Monitor` if the subscription-move preflight should inventory diagnostic settings.
 
-## 1. Export inventory
+## 1A. Export Subscription-Wide Authorization
+
+Use the comprehensive export before deciding which resource-group assignments
+should become `dev-keys`, `qa-keys`, or production subscription assignments:
+
+```powershell
+.\scripts\Export-SubscriptionAuthorizationInventory.ps1 `
+  -SubscriptionId '<keys-subscription-id>' `
+  -OutputPath .\out
+```
+
+By default, the script inventories:
+
+- Active and classic RBAC assignments below the subscription and assignments
+  inherited from parent scopes.
+- PIM eligible and active role-assignment schedule instances.
+- Azure deny assignments.
+- Exact actions, not-actions, data actions, and not-data-actions for used roles.
+- Legacy Key Vault access policies and principal resolution.
+
+This inventory does not expand transitive Entra group membership or entitlement
+management access-package assignments. Use the exported principal IDs to review
+those identity-governance relationships separately.
+
+The spreadsheet-oriented output is:
+
+```text
+16-authorization-review.csv
+17-role-definitions-used.csv
+18-principal-summary.csv
+19-scope-summary.csv
+20-inventory-coverage.csv
+21-inventory-errors.csv
+```
+
+Open `16-authorization-review.csv` in Excel and filter by `ScopeLevel`,
+`ResourceGroup`, `RoleDefinitionName`, and `PrincipalId`. The blank
+`Proposed*`, `Decision`, owner, approval, and notes columns are the working
+review record. Use `17-role-definitions-used.csv` when a role name alone is not
+enough to determine its effective permissions.
+
+Check `20-inventory-coverage.csv` and `21-inventory-errors.csv` before trusting
+the workbook. Investigate every `Failed` or `ReviewRequired` coverage row. The
+command fails after writing its reports if a requested inventory component
+failed. `-AllowPartial` accepts those failures only when a deliberately
+incomplete export is required. `-SkipPim`,
+`-SkipDenyAssignments`, `-SkipKeyVaultAccessPolicies`, and
+`-SkipPrincipalResolution` are explicit scope reductions and are recorded in
+the coverage file.
+
+## 1B. Export Key Vault-Only Inventory
 
 ```powershell
 .\scripts\Export-KeyVaultLegacyAccess.ps1 `
