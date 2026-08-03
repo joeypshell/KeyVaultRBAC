@@ -75,9 +75,7 @@ approver for each promoted assignment.
 Export management-plane access from the old `keys` subscription:
 
 ```powershell
-Connect-AzAccount -Tenant '<current-tenant-id>'
-
-.\scripts\Export-KeysManagementPlanePermissions.ps1 `
+.\scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1 `
   -TenantId '<current-tenant-id>' `
   -Subscription '<keys-subscription-id>' `
   -OutputPath .\keys-management-plane-permissions.csv
