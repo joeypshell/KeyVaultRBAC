@@ -6,7 +6,7 @@ param(
     [switch] $IncludeRbac,
     [string[]] $ManagementGroupScope,
     [ValidateRange(1, 2147483647)]
-    [int] $First = 5000,
+    [int] $First = 1000,
     [switch] $SkipAzContextCheck
 )
 

@@ -158,6 +158,7 @@ function Search-AzGraph {
     param(
         [string] $Query,
         [string[]] $Subscription,
+        [ValidateRange(1, 1000)]
         [int] $First,
         [int] $Skip
     )
@@ -200,6 +201,23 @@ function Get-AzContext {
         Tenant       = 'smoke-test'
     }
 }
+
+$defaultPaginationOut = Join-Path $testOut 'pagination-default'
+& (Join-Path $repoRoot 'scripts\Export-KeyVaultLegacyAccess.ps1') `
+    -OutputPath $defaultPaginationOut `
+    -SkipAzContextCheck
+
+$defaultPaginationRows = @(Import-Csv -LiteralPath (Join-Path $defaultPaginationOut '01-vault-inventory.csv'))
+if ($defaultPaginationRows.Count -ne 1000) {
+    throw "Expected the default export limit to return 1000 vault rows, got $($defaultPaginationRows.Count)."
+}
+if ($global:KeyVaultRbacSmokeGraphCalls.Count -ne 1) {
+    throw "Expected one default Resource Graph request, got $($global:KeyVaultRbacSmokeGraphCalls.Count)."
+}
+if ($global:KeyVaultRbacSmokeGraphCalls[0].First -ne 1000 -or $global:KeyVaultRbacSmokeGraphCalls[0].Skip -ne 0) {
+    throw 'The default Resource Graph request did not use the supported 1000-record page size.'
+}
+$global:KeyVaultRbacSmokeGraphCalls.Clear()
 
 $paginationOut = Join-Path $testOut 'pagination'
 & (Join-Path $repoRoot 'scripts\Export-KeyVaultLegacyAccess.ps1') `
