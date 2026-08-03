@@ -18,6 +18,7 @@ analysis but are outside the current execution scope.
 ## Files
 
 ```text
+scripts/Connect-And-ExportKeysManagementPlanePermissions.ps1
 scripts/Export-KeysManagementPlanePermissions.ps1
 scripts/Export-SubscriptionManagementPlaneAccess.ps1
 scripts/Export-KeyVaultLegacyAccess.ps1
@@ -54,32 +55,29 @@ Install `Az.Monitor` if the subscription-move preflight should inventory diagnos
 
 ### Standalone One-CSV Export
 
-For the immediate `keys` subscription inventory, run:
+For the immediate subscription inventory, use the connected entrypoint:
 
 ```powershell
-.\scripts\Export-KeysManagementPlanePermissions.ps1 `
-  -OutputPath .\keys-management-plane-permissions.csv
+.\scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1
 ```
 
-The default subscription name is `keys`. Pass `-Subscription
-'<subscription-id>'` when the name is different or ambiguous. The script creates
-only the requested CSV and has no dependency on other repository scripts or
-configuration files.
+It prompts for the tenant, runs `Connect-AzAccount` against only that tenant,
+automatically uses the subscription when there is only one, or displays a
+numbered selection when there are several. It then creates
+`keys-management-plane-permissions.csv` in the current directory.
 
-When the account has cached access to multiple tenants, authenticate and scope
-the lookup explicitly so Az.Accounts does not probe unrelated tenants:
+Values can also be supplied up front for a non-interactive selection:
 
 ```powershell
-Connect-AzAccount -Tenant '<tenant-id>'
-
-.\scripts\Export-KeysManagementPlanePermissions.ps1 `
+.\scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1 `
   -TenantId '<tenant-id>' `
   -Subscription '<keys-subscription-id>' `
   -OutputPath .\keys-management-plane-permissions.csv
 ```
 
-`-Subscription` accepts exactly one subscription name or ID. Do not pass the
-array returned by an unfiltered `Get-AzSubscription` call.
+Use `Export-KeysManagementPlanePermissions.ps1` directly only when the caller
+already owns authentication and context setup. Both entrypoints require exactly
+one subscription name or ID and never accept an unfiltered subscription array.
 
 The CSV contains active and inherited RBAC, PIM eligible and active assignments,
 management-plane deny assignments, exact role `Actions`, scope classification,
