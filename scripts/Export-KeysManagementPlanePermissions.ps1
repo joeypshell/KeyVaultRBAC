@@ -14,7 +14,10 @@ create role assignments, or change enableRbacAuthorization.
 [CmdletBinding()]
 param(
     [ValidateNotNullOrEmpty()]
-    [string] $Subscription = 'keys',
+    [string[]] $Subscription = @('keys'),
+
+    [ValidateNotNullOrEmpty()]
+    [string] $TenantId,
 
     [ValidateNotNullOrEmpty()]
     [string] $OutputPath = (Join-Path (Get-Location) 'keys-management-plane-permissions.csv'),
@@ -65,6 +68,26 @@ function Get-FirstValue {
     }
 
     return $null
+}
+
+function ConvertTo-SingleRequiredString {
+    param(
+        [object] $Value,
+        [Parameter(Mandatory)]
+        [string] $Name
+    )
+
+    $values = @(
+        @($Value) |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+
+    if ($values.Count -ne 1) {
+        throw "$Name must contain exactly one value; received $($values.Count)."
+    }
+
+    return $values[0]
 }
 
 function ConvertTo-FlatList {
@@ -453,26 +476,49 @@ if (-not $originalContext) {
     throw 'No Azure context found. Run Connect-AzAccount first.'
 }
 
-$subscriptionMatches = @(
-    Get-AzSubscription -ErrorAction Stop |
-        Where-Object {
-            [string]$_.Id -ieq $Subscription -or
-            [string]$_.Name -ieq $Subscription
-        }
-)
+$subscriptionSelector = ConvertTo-SingleRequiredString `
+    -Value $Subscription `
+    -Name 'Subscription'
+
+$contextTenantId = Get-FirstValue `
+    -InputObject $originalContext `
+    -Path @('Tenant.Id', 'Tenant.TenantId', 'TenantId')
+$lookupTenantId = if ($PSBoundParameters.ContainsKey('TenantId')) {
+    $TenantId
+}
+else {
+    ConvertTo-SingleRequiredString -Value $contextTenantId -Name 'Current Azure context tenant ID'
+}
+
+$subscriptionLookupParameters = @{
+    TenantId    = $lookupTenantId
+    ErrorAction = 'Stop'
+}
+$parsedSubscriptionId = [guid]::Empty
+if ([guid]::TryParse($subscriptionSelector, [ref]$parsedSubscriptionId)) {
+    $subscriptionLookupParameters.SubscriptionId = $subscriptionSelector
+}
+else {
+    $subscriptionLookupParameters.SubscriptionName = $subscriptionSelector
+}
+
+$subscriptionMatches = @(Get-AzSubscription @subscriptionLookupParameters)
 if ($subscriptionMatches.Count -eq 0) {
-    throw "Subscription '$Subscription' was not found. Run Get-AzSubscription to verify its name or ID."
+    throw "Subscription '$subscriptionSelector' was not found in tenant '$lookupTenantId'. Verify both values with Get-AzSubscription -TenantId '$lookupTenantId'."
 }
 if ($subscriptionMatches.Count -gt 1) {
     $matches = $subscriptionMatches |
         ForEach-Object { "$($_.Name) [$($_.Id)] tenant=$($_.TenantId)" }
-    throw "Subscription '$Subscription' is ambiguous: $($matches -join '; '). Pass its subscription ID instead."
+    throw "Subscription '$subscriptionSelector' is ambiguous in tenant '$lookupTenantId': $($matches -join '; '). Pass its subscription ID instead."
 }
 
 $selectedSubscription = $subscriptionMatches[0]
-$subscriptionId = [string]$selectedSubscription.Id
-$subscriptionName = [string]$selectedSubscription.Name
-$tenantId = [string]$selectedSubscription.TenantId
+$subscriptionId = ConvertTo-SingleRequiredString -Value $selectedSubscription.Id -Name 'Resolved subscription ID'
+$subscriptionName = ConvertTo-SingleRequiredString -Value $selectedSubscription.Name -Name 'Resolved subscription name'
+$selectedTenantId = ConvertTo-SingleRequiredString -Value $selectedSubscription.TenantId -Name 'Resolved tenant ID'
+if ($selectedTenantId -ine $lookupTenantId) {
+    throw "Subscription '$subscriptionName' resolved to tenant '$selectedTenantId', not requested tenant '$lookupTenantId'."
+}
 $subscriptionScope = "/subscriptions/$subscriptionId"
 $generatedUtc = [datetime]::UtcNow.ToString('o')
 $resolvedOutputPath = [System.IO.Path]::GetFullPath($OutputPath)
@@ -556,7 +602,7 @@ function New-CsvRow {
     $row.GeneratedUtc = $generatedUtc
     $row.SubscriptionName = $subscriptionName
     $row.SubscriptionId = $subscriptionId
-    $row.TenantId = $tenantId
+    $row.TenantId = $selectedTenantId
     $row.Scope = $ScopeMetadata.Scope
     $row.ScopeLevel = $ScopeMetadata.ScopeLevel
     $row.ScopeRelation = $ScopeMetadata.ScopeRelation
@@ -655,7 +701,7 @@ function Add-RoleAssignmentRow {
 }
 
 try {
-    Set-AzContext -Subscription $subscriptionId -Tenant $tenantId -ErrorAction Stop | Out-Null
+    Set-AzContext -Subscription $subscriptionId -Tenant $selectedTenantId -ErrorAction Stop | Out-Null
 
     $assignmentsBelowSubscription = @(Get-AzRoleAssignment -ErrorAction Stop)
     $assignmentsEffectiveAtSubscription = @(

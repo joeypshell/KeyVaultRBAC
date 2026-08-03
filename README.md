@@ -66,6 +66,21 @@ The default subscription name is `keys`. Pass `-Subscription
 only the requested CSV and has no dependency on other repository scripts or
 configuration files.
 
+When the account has cached access to multiple tenants, authenticate and scope
+the lookup explicitly so Az.Accounts does not probe unrelated tenants:
+
+```powershell
+Connect-AzAccount -Tenant '<tenant-id>'
+
+.\scripts\Export-KeysManagementPlanePermissions.ps1 `
+  -TenantId '<tenant-id>' `
+  -Subscription '<keys-subscription-id>' `
+  -OutputPath .\keys-management-plane-permissions.csv
+```
+
+`-Subscription` accepts exactly one subscription name or ID. Do not pass the
+array returned by an unfiltered `Get-AzSubscription` call.
+
 The CSV contains active and inherited RBAC, PIM eligible and active assignments,
 management-plane deny assignments, exact role `Actions`, scope classification,
 principal details, and blank decision columns. Assignments whose role definition

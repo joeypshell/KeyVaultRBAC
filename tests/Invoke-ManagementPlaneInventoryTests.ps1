@@ -157,11 +157,20 @@ function Get-AzContext {
     return $global:KeyVaultRbacAuthorizationTestContext
 }
 
+$global:KeyVaultRbacSubscriptionQueries = New-Object System.Collections.Generic.List[object]
 function Get-AzSubscription {
     param(
         [string] $SubscriptionId,
+        [string] $SubscriptionName,
+        [string] $TenantId,
         [object] $ErrorAction
     )
+
+    $global:KeyVaultRbacSubscriptionQueries.Add([pscustomobject]@{
+        SubscriptionId   = $SubscriptionId
+        SubscriptionName = $SubscriptionName
+        TenantId         = $TenantId
+    })
 
     $resolvedSubscriptionId = if ($SubscriptionId) {
         $SubscriptionId
@@ -169,15 +178,17 @@ function Get-AzSubscription {
     else {
         $global:KeyVaultRbacAuthorizationTestContext.Subscription.Id
     }
+    $resolvedTenantId = if ($TenantId) { $TenantId } else { $script:tenantId }
 
     return [pscustomobject]@{
         Id       = $resolvedSubscriptionId
         Name     = 'keys'
-        TenantId = $tenantId
+        TenantId = $resolvedTenantId
         State    = 'Enabled'
     }
 }
 
+$global:KeyVaultRbacContextSwitches = New-Object System.Collections.Generic.List[object]
 function Set-AzContext {
     param(
         [string] $Subscription,
@@ -186,6 +197,13 @@ function Set-AzContext {
         [object] $Context,
         [object] $ErrorAction
     )
+
+    if ($Subscription) {
+        $global:KeyVaultRbacContextSwitches.Add([pscustomobject]@{
+            Subscription = $Subscription
+            Tenant       = $Tenant
+        })
+    }
 
     return $global:KeyVaultRbacAuthorizationTestContext
 }
@@ -424,10 +442,27 @@ $standaloneOutputPath = Join-Path $testOutputPath 'keys-management-plane-permiss
 if (Test-Path -LiteralPath $standaloneOutputPath) {
     Remove-Item -LiteralPath $standaloneOutputPath -Force
 }
+$global:KeyVaultRbacSubscriptionQueries.Clear()
+$global:KeyVaultRbacContextSwitches.Clear()
 
 & (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
     -Subscription 'keys' `
     -OutputPath $standaloneOutputPath
+
+if ($global:KeyVaultRbacSubscriptionQueries.Count -ne 1) {
+    throw "Expected one tenant-scoped subscription query, got $($global:KeyVaultRbacSubscriptionQueries.Count)."
+}
+$standaloneSubscriptionQuery = $global:KeyVaultRbacSubscriptionQueries[0]
+if ($standaloneSubscriptionQuery.SubscriptionName -ne 'keys' -or $standaloneSubscriptionQuery.TenantId -ne $tenantId) {
+    throw 'Standalone export did not resolve the subscription name only within the active tenant.'
+}
+if ($global:KeyVaultRbacContextSwitches.Count -ne 1) {
+    throw "Expected one scalar subscription context switch, got $($global:KeyVaultRbacContextSwitches.Count)."
+}
+$standaloneContextSwitch = $global:KeyVaultRbacContextSwitches[0]
+if ($standaloneContextSwitch.Subscription -ne $subscriptionId -or $standaloneContextSwitch.Tenant -ne $tenantId) {
+    throw 'Standalone export did not switch context with scalar subscription and tenant IDs.'
+}
 
 if (-not (Test-Path -LiteralPath $standaloneOutputPath)) {
     throw 'Standalone management-plane CSV was not created.'
@@ -465,6 +500,24 @@ if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'PimEligibleRoleAss
 }
 if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'DenyAssignment' })) {
     throw 'Standalone CSV did not include management-plane deny assignments.'
+}
+
+$multipleSubscriptionRejected = $false
+try {
+    & (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
+        -Subscription @('keys', 'another-subscription') `
+        -OutputPath (Join-Path $testOutputPath 'multiple-subscriptions.csv') `
+        -SkipPim `
+        -SkipDenyAssignments
+}
+catch {
+    if ($_.Exception.Message -notlike '*Subscription must contain exactly one value*') {
+        throw
+    }
+    $multipleSubscriptionRejected = $true
+}
+if (-not $multipleSubscriptionRejected) {
+    throw 'Standalone export accepted multiple subscription values.'
 }
 
 $failureOutputPath = Join-Path $testOutputPath 'keys-management-plane-incomplete.csv'
