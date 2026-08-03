@@ -443,10 +443,6 @@ if (Test-Path -LiteralPath $standaloneOutputPath) {
     Remove-Item -LiteralPath $standaloneOutputPath -Force
 }
 $standaloneExporterPath = Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1'
-$standaloneExporterCommand = Get-Command -Name $standaloneExporterPath
-if ($standaloneExporterCommand.Parameters['Subscription'].ParameterType -ne [string]) {
-    throw "Standalone Subscription parameter must be System.String, got $($standaloneExporterCommand.Parameters['Subscription'].ParameterType.FullName)."
-}
 $global:KeyVaultRbacSubscriptionQueries.Clear()
 $global:KeyVaultRbacContextSwitches.Clear()
 

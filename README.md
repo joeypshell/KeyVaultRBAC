@@ -66,9 +66,8 @@ Connect-AzAccount -Tenant '<tenant-id>'
   -OutputPath .\keys-management-plane-permissions.csv
 ```
 
-`-Subscription` is a scalar `[string]` parameter. Pass one literal subscription
-name or ID, not the array returned by an unfiltered `Get-AzSubscription` call.
-The default subscription name is `keys`.
+Pass one literal subscription name or ID, not an unfiltered list of
+subscriptions. The default subscription name is `keys`.
 
 The CSV contains active and inherited RBAC, PIM eligible and active assignments,
 management-plane deny assignments, exact role `Actions`, scope classification,
