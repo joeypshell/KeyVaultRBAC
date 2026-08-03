@@ -18,7 +18,6 @@ analysis but are outside the current execution scope.
 ## Files
 
 ```text
-scripts/Connect-And-ExportKeysManagementPlanePermissions.ps1
 scripts/Export-KeysManagementPlanePermissions.ps1
 scripts/Export-SubscriptionManagementPlaneAccess.ps1
 scripts/Export-KeyVaultLegacyAccess.ps1
@@ -55,29 +54,21 @@ Install `Az.Monitor` if the subscription-move preflight should inventory diagnos
 
 ### Standalone One-CSV Export
 
-For the immediate subscription inventory, use the connected entrypoint:
+Connect to the tenant, then run the standalone exporter with one subscription
+name or ID:
 
 ```powershell
-.\scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1
-```
+Connect-AzAccount -Tenant '<tenant-id>'
 
-It prompts for the tenant, runs `Connect-AzAccount` against only that tenant,
-automatically uses the subscription when there is only one, or displays a
-numbered selection when there are several. It then creates
-`keys-management-plane-permissions.csv` in the current directory.
-
-Values can also be supplied up front for a non-interactive selection:
-
-```powershell
-.\scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1 `
+.\scripts\Export-KeysManagementPlanePermissions.ps1 `
   -TenantId '<tenant-id>' `
   -Subscription '<keys-subscription-id>' `
   -OutputPath .\keys-management-plane-permissions.csv
 ```
 
-Use `Export-KeysManagementPlanePermissions.ps1` directly only when the caller
-already owns authentication and context setup. Both entrypoints require exactly
-one subscription name or ID and never accept an unfiltered subscription array.
+`-Subscription` is a scalar `[string]` parameter. Pass one literal subscription
+name or ID, not the array returned by an unfiltered `Get-AzSubscription` call.
+The default subscription name is `keys`.
 
 The CSV contains active and inherited RBAC, PIM eligible and active assignments,
 management-plane deny assignments, exact role `Actions`, scope classification,

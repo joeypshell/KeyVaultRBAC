@@ -14,7 +14,7 @@ create role assignments, or change enableRbacAuthorization.
 [CmdletBinding()]
 param(
     [ValidateNotNullOrEmpty()]
-    [string[]] $Subscription = @('keys'),
+    [string] $Subscription = 'keys',
 
     [ValidateNotNullOrEmpty()]
     [string] $TenantId,
@@ -476,9 +476,7 @@ if (-not $originalContext) {
     throw 'No Azure context found. Run Connect-AzAccount first.'
 }
 
-$subscriptionSelector = ConvertTo-SingleRequiredString `
-    -Value $Subscription `
-    -Name 'Subscription'
+$subscriptionSelector = $Subscription
 
 $contextTenantId = Get-FirstValue `
     -InputObject $originalContext `

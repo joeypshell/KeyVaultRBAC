@@ -157,35 +157,6 @@ function Get-AzContext {
     return $global:KeyVaultRbacAuthorizationTestContext
 }
 
-$global:KeyVaultRbacReadHostResponses = New-Object System.Collections.Generic.Queue[string]
-function Read-Host {
-    param([string] $Prompt)
-
-    if ($global:KeyVaultRbacReadHostResponses.Count -eq 0) {
-        throw "Unexpected prompt: $Prompt"
-    }
-
-    return $global:KeyVaultRbacReadHostResponses.Dequeue()
-}
-
-$global:KeyVaultRbacConnectCalls = New-Object System.Collections.Generic.List[object]
-function Connect-AzAccount {
-    param(
-        [string] $Tenant,
-        [string] $Scope,
-        [switch] $UseDeviceAuthentication,
-        [object] $ErrorAction
-    )
-
-    $global:KeyVaultRbacConnectCalls.Add([pscustomobject]@{
-        Tenant                  = $Tenant
-        Scope                   = $Scope
-        UseDeviceAuthentication = $UseDeviceAuthentication.IsPresent
-    })
-
-    return $global:KeyVaultRbacAuthorizationTestContext
-}
-
 $global:KeyVaultRbacSubscriptionQueries = New-Object System.Collections.Generic.List[object]
 function Get-AzSubscription {
     param(
@@ -471,10 +442,15 @@ $standaloneOutputPath = Join-Path $testOutputPath 'keys-management-plane-permiss
 if (Test-Path -LiteralPath $standaloneOutputPath) {
     Remove-Item -LiteralPath $standaloneOutputPath -Force
 }
+$standaloneExporterPath = Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1'
+$standaloneExporterCommand = Get-Command -Name $standaloneExporterPath
+if ($standaloneExporterCommand.Parameters['Subscription'].ParameterType -ne [string]) {
+    throw "Standalone Subscription parameter must be System.String, got $($standaloneExporterCommand.Parameters['Subscription'].ParameterType.FullName)."
+}
 $global:KeyVaultRbacSubscriptionQueries.Clear()
 $global:KeyVaultRbacContextSwitches.Clear()
 
-& (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
+& $standaloneExporterPath `
     -Subscription 'keys' `
     -OutputPath $standaloneOutputPath
 
@@ -529,68 +505,6 @@ if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'PimEligibleRoleAss
 }
 if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'DenyAssignment' })) {
     throw 'Standalone CSV did not include management-plane deny assignments.'
-}
-
-$connectedOutputPath = Join-Path $testOutputPath 'connected-keys-management-plane-permissions.csv'
-if (Test-Path -LiteralPath $connectedOutputPath) {
-    Remove-Item -LiteralPath $connectedOutputPath -Force
-}
-$global:KeyVaultRbacConnectCalls.Clear()
-$global:KeyVaultRbacSubscriptionQueries.Clear()
-$global:KeyVaultRbacContextSwitches.Clear()
-$global:KeyVaultRbacReadHostResponses.Enqueue($tenantId)
-
-& (Join-Path $repoRoot 'scripts\Connect-And-ExportKeysManagementPlanePermissions.ps1') `
-    -OutputPath $connectedOutputPath
-
-if ($global:KeyVaultRbacConnectCalls.Count -ne 1) {
-    throw "Expected one tenant login, got $($global:KeyVaultRbacConnectCalls.Count)."
-}
-$connectCall = $global:KeyVaultRbacConnectCalls[0]
-if ($connectCall.Tenant -ne $tenantId -or $connectCall.Scope -ne 'Process') {
-    throw 'Connected export did not authenticate only against the requested tenant in process scope.'
-}
-if ($global:KeyVaultRbacReadHostResponses.Count -ne 0) {
-    throw 'Connected export did not consume exactly one tenant prompt response.'
-}
-if ($global:KeyVaultRbacSubscriptionQueries.Count -ne 2) {
-    throw "Expected discovery and scalar subscription queries, got $($global:KeyVaultRbacSubscriptionQueries.Count)."
-}
-$discoveryQuery = $global:KeyVaultRbacSubscriptionQueries[0]
-if ($discoveryQuery.TenantId -ne $tenantId -or $discoveryQuery.SubscriptionId -or $discoveryQuery.SubscriptionName) {
-    throw 'Connected export did not limit subscription discovery to the authenticated tenant.'
-}
-$scalarQuery = $global:KeyVaultRbacSubscriptionQueries[1]
-if ($scalarQuery.SubscriptionId -ne $subscriptionId -or $scalarQuery.TenantId -ne $tenantId) {
-    throw 'Connected export did not hand one scalar subscription ID to the management-plane exporter.'
-}
-if ($global:KeyVaultRbacContextSwitches.Count -ne 1) {
-    throw "Expected one connected-export context switch, got $($global:KeyVaultRbacContextSwitches.Count)."
-}
-if (-not (Test-Path -LiteralPath $connectedOutputPath)) {
-    throw 'Connected management-plane export did not create its CSV.'
-}
-$connectedRows = @(Import-Csv -LiteralPath $connectedOutputPath)
-if ($connectedRows.Count -ne 7) {
-    throw "Expected seven connected management-plane rows, got $($connectedRows.Count)."
-}
-
-$multipleSubscriptionRejected = $false
-try {
-    & (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
-        -Subscription @('keys', 'another-subscription') `
-        -OutputPath (Join-Path $testOutputPath 'multiple-subscriptions.csv') `
-        -SkipPim `
-        -SkipDenyAssignments
-}
-catch {
-    if ($_.Exception.Message -notlike '*Subscription must contain exactly one value*') {
-        throw
-    }
-    $multipleSubscriptionRejected = $true
-}
-if (-not $multipleSubscriptionRejected) {
-    throw 'Standalone export accepted multiple subscription values.'
 }
 
 $failureOutputPath = Join-Path $testOutputPath 'keys-management-plane-incomplete.csv'
