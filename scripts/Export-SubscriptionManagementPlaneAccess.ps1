@@ -626,7 +626,7 @@ try {
 
     $roleDefinitionByGuid = @{}
     foreach ($roleDefinition in $roleDefinitions) {
-        $roleDefinitionGuid = Get-RoleDefinitionGuid (Get-FirstValue -InputObject $roleDefinition -Path @('Name', 'Id'))
+        $roleDefinitionGuid = Get-RoleDefinitionGuid (Get-FirstValue -InputObject $roleDefinition -Path @('Id', 'Name'))
         if (-not [string]::IsNullOrWhiteSpace($roleDefinitionGuid)) {
             $roleDefinitionByGuid[$roleDefinitionGuid.ToLowerInvariant()] = $roleDefinition
         }
@@ -832,6 +832,8 @@ try {
         $roleDetails = Get-RoleDetails `
             -RoleDefinitionId (Get-FirstValue -InputObject $assignment -Path @('RoleDefinitionId')) `
             -FallbackName ([string](Get-FirstValue -InputObject $assignment -Path @(
+                'RoleDefinitionDisplayName',
+                'ExpandedPropertiesRoleDefinitionDisplayName',
                 'ExpandedProperties.RoleDefinition.DisplayName'
             )))
 
@@ -841,8 +843,11 @@ try {
             PrincipalId         = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalId'))
             PrincipalType       = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalType'))
             PrincipalDisplayName = [string](Get-FirstValue -InputObject $assignment -Path @(
+                'PrincipalDisplayName',
+                'ExpandedPropertiesPrincipalDisplayName',
                 'ExpandedProperties.Principal.DisplayName'
             ))
+            PrincipalSignInName = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalEmail'))
             RoleDefinitionName  = $roleDetails.Name
             RoleDefinitionId    = $roleDetails.Id
             IsCustomRole        = $roleDetails.IsCustom
@@ -869,6 +874,8 @@ try {
         $roleDetails = Get-RoleDetails `
             -RoleDefinitionId (Get-FirstValue -InputObject $assignment -Path @('RoleDefinitionId')) `
             -FallbackName ([string](Get-FirstValue -InputObject $assignment -Path @(
+                'RoleDefinitionDisplayName',
+                'ExpandedPropertiesRoleDefinitionDisplayName',
                 'ExpandedProperties.RoleDefinition.DisplayName'
             )))
 
@@ -878,8 +885,11 @@ try {
             PrincipalId         = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalId'))
             PrincipalType       = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalType'))
             PrincipalDisplayName = [string](Get-FirstValue -InputObject $assignment -Path @(
+                'PrincipalDisplayName',
+                'ExpandedPropertiesPrincipalDisplayName',
                 'ExpandedProperties.Principal.DisplayName'
             ))
+            PrincipalSignInName = [string](Get-FirstValue -InputObject $assignment -Path @('PrincipalEmail'))
             RoleDefinitionName  = $roleDetails.Name
             RoleDefinitionId    = $roleDetails.Id
             IsCustomRole        = $roleDetails.IsCustom
