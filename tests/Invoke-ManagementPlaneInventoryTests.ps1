@@ -163,8 +163,15 @@ function Get-AzSubscription {
         [object] $ErrorAction
     )
 
+    $resolvedSubscriptionId = if ($SubscriptionId) {
+        $SubscriptionId
+    }
+    else {
+        $global:KeyVaultRbacAuthorizationTestContext.Subscription.Id
+    }
+
     return [pscustomobject]@{
-        Id       = $SubscriptionId
+        Id       = $resolvedSubscriptionId
         Name     = 'keys'
         TenantId = $tenantId
         State    = 'Enabled'
@@ -216,6 +223,10 @@ function Get-AzRoleEligibilityScheduleInstance {
         [string] $Scope,
         [object] $ErrorAction
     )
+
+    if ($global:KeyVaultRbacStandalonePimFailure) {
+        throw 'Simulated PIM inventory failure.'
+    }
 
     return [pscustomobject]@{
         Id               = "$subscriptionScope/providers/Microsoft.Authorization/roleEligibilityScheduleInstances/00000000-0000-0000-0000-000000000107"
@@ -407,6 +418,77 @@ if (
     )
 ) {
     throw 'Unknown role definition did not set management classification to ReviewRequired.'
+}
+
+$standaloneOutputPath = Join-Path $testOutputPath 'keys-management-plane-permissions.csv'
+if (Test-Path -LiteralPath $standaloneOutputPath) {
+    Remove-Item -LiteralPath $standaloneOutputPath -Force
+}
+
+& (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
+    -Subscription 'keys' `
+    -OutputPath $standaloneOutputPath
+
+if (-not (Test-Path -LiteralPath $standaloneOutputPath)) {
+    throw 'Standalone management-plane CSV was not created.'
+}
+$standaloneRows = @(Import-Csv -LiteralPath $standaloneOutputPath)
+if ($standaloneRows.Count -ne 7) {
+    throw "Expected seven standalone management-plane rows, got $($standaloneRows.Count)."
+}
+if ($standaloneRows.SubscriptionName -contains '') {
+    throw 'Standalone export did not resolve the keys subscription name.'
+}
+if (@($standaloneRows | Where-Object { $_.RoleDefinitionName -eq 'Key Vault Secrets User' }).Count -gt 0) {
+    throw 'Standalone management-plane CSV included a role containing DataActions.'
+}
+$standaloneManagementGroupRow = $standaloneRows |
+    Where-Object { $_.ScopeLevel -eq 'ManagementGroup' } |
+    Select-Object -First 1
+if ($standaloneManagementGroupRow.IsInheritedIntoSubscription -ne 'True') {
+    throw 'Standalone CSV did not include inherited management-group access.'
+}
+$standaloneVaultContributorRow = $standaloneRows |
+    Where-Object { $_.RoleDefinitionName -eq 'Key Vault Contributor' } |
+    Select-Object -First 1
+if ($standaloneVaultContributorRow.CanModifyLegacyAccessPolicies -ne 'True') {
+    throw 'Standalone CSV did not flag the legacy access-policy escalation risk.'
+}
+$standaloneUnknownRoleRow = $standaloneRows |
+    Where-Object { $_.RoleDefinitionId -eq $unknownRoleId } |
+    Select-Object -First 1
+if ($standaloneUnknownRoleRow.IncludeInManagementPlan -ne 'ReviewRequired') {
+    throw 'Standalone CSV silently omitted or approved an unresolved role definition.'
+}
+if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'PimEligibleRoleAssignment' })) {
+    throw 'Standalone CSV did not include PIM eligibility.'
+}
+if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'DenyAssignment' })) {
+    throw 'Standalone CSV did not include management-plane deny assignments.'
+}
+
+$failureOutputPath = Join-Path $testOutputPath 'keys-management-plane-incomplete.csv'
+if (Test-Path -LiteralPath $failureOutputPath) {
+    Remove-Item -LiteralPath $failureOutputPath -Force
+}
+$global:KeyVaultRbacStandalonePimFailure = $true
+$failedClosed = $false
+try {
+    & (Join-Path $repoRoot 'scripts\Export-KeysManagementPlanePermissions.ps1') `
+        -Subscription 'keys' `
+        -OutputPath $failureOutputPath
+}
+catch {
+    $failedClosed = $true
+}
+finally {
+    $global:KeyVaultRbacStandalonePimFailure = $false
+}
+if (-not $failedClosed) {
+    throw 'Standalone export did not fail when PIM inventory failed.'
+}
+if (Test-Path -LiteralPath $failureOutputPath) {
+    throw 'Standalone export left a partial CSV after PIM inventory failed.'
 }
 
 Write-Host "Management-plane inventory tests passed. Output: $testOutputPath"

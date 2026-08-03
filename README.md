@@ -18,6 +18,7 @@ analysis but are outside the current execution scope.
 ## Files
 
 ```text
+scripts/Export-KeysManagementPlanePermissions.ps1
 scripts/Export-SubscriptionManagementPlaneAccess.ps1
 scripts/Export-KeyVaultLegacyAccess.ps1
 scripts/Resolve-KeyVaultRbacMapping.ps1
@@ -51,7 +52,29 @@ Install `Az.Monitor` if the subscription-move preflight should inventory diagnos
 
 ## 1. Export Management-Plane Access
 
-Use this export before deciding which resource-group assignments
+### Standalone One-CSV Export
+
+For the immediate `keys` subscription inventory, run:
+
+```powershell
+.\scripts\Export-KeysManagementPlanePermissions.ps1 `
+  -OutputPath .\keys-management-plane-permissions.csv
+```
+
+The default subscription name is `keys`. Pass `-Subscription
+'<subscription-id>'` when the name is different or ambiguous. The script creates
+only the requested CSV and has no dependency on other repository scripts or
+configuration files.
+
+The CSV contains active and inherited RBAC, PIM eligible and active assignments,
+management-plane deny assignments, exact role `Actions`, scope classification,
+principal details, and blank decision columns. Assignments whose role definition
+contains `DataActions` are excluded. The command fails without replacing the CSV
+with partial results when a required Azure inventory call fails.
+
+### Extended Review Package
+
+Use the extended export before deciding which resource-group assignments
 should become `dev-keys`, `qa-keys`, or production subscription assignments:
 
 ```powershell

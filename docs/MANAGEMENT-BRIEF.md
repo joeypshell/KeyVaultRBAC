@@ -157,6 +157,8 @@ validated change, not the primary rollback mechanism.
 
 ## Evidence Required Before Each Move
 
+- Approved `keys-management-plane-permissions.csv` or the extended review package
+  below
 - `01-vault-inventory.csv`
 - `13-subscription-move-preflight.csv`
 - `14-role-assignments-to-recreate.csv`

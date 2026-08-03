@@ -75,6 +75,14 @@ approver for each promoted assignment.
 Export management-plane access from the old `keys` subscription:
 
 ```powershell
+.\scripts\Export-KeysManagementPlanePermissions.ps1 `
+  -OutputPath .\keys-management-plane-permissions.csv
+```
+
+Use the extended multi-file package when separate coverage, role, principal, and
+scope summaries are required:
+
+```powershell
 .\scripts\Export-SubscriptionManagementPlaneAccess.ps1 `
   -SubscriptionId '<keys-subscription-id>' `
   -OutputPath .\out
