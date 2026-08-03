@@ -86,8 +86,8 @@ $global:KeyVaultRbacAuthorizationTestAssignments = @(
 
 $global:KeyVaultRbacAuthorizationTestRoleDefinitions = @(
     [pscustomobject]@{
-        Name             = $readerRoleId
-        RoleName         = 'Reader'
+        Id               = $readerRoleId
+        Name             = 'Reader'
         IsCustom         = $false
         Description      = 'Read control-plane resources.'
         AssignableScopes = @('/')
@@ -101,8 +101,8 @@ $global:KeyVaultRbacAuthorizationTestRoleDefinitions = @(
         )
     },
     [pscustomobject]@{
-        Name             = $secretsUserRoleId
-        RoleName         = 'Key Vault Secrets User'
+        Id               = $secretsUserRoleId
+        Name             = 'Key Vault Secrets User'
         IsCustom         = $false
         Description      = 'Read secret contents.'
         AssignableScopes = @('/')
@@ -119,8 +119,8 @@ $global:KeyVaultRbacAuthorizationTestRoleDefinitions = @(
         )
     },
     [pscustomobject]@{
-        Name             = $keyVaultContributorRoleId
-        RoleName         = 'Key Vault Contributor'
+        Id               = $keyVaultContributorRoleId
+        Name             = 'Key Vault Contributor'
         IsCustom         = $false
         Description      = 'Manage vault resources without accessing vault data.'
         AssignableScopes = @('/')
@@ -251,16 +251,15 @@ function Get-AzRoleEligibilityScheduleInstance {
         Scope            = $subscriptionScope
         PrincipalId      = '99999999-9999-9999-9999-999999999999'
         PrincipalType    = 'User'
+        PrincipalDisplayName = 'Eligible Reader'
+        PrincipalEmail   = 'eligible-reader@example.invalid'
         RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/$readerRoleId"
+        RoleDefinitionDisplayName = 'Reader'
         AssignmentType   = 'Assigned'
         MemberType       = 'Direct'
         Status           = 'Provisioned'
         StartDateTime    = '2026-01-01T00:00:00Z'
         EndDateTime      = ''
-        ExpandedProperties = [pscustomobject]@{
-            Principal    = [pscustomobject]@{ DisplayName = 'Eligible Reader' }
-            RoleDefinition = [pscustomobject]@{ DisplayName = 'Reader' }
-        }
     }
 }
 
@@ -270,22 +269,37 @@ function Get-AzRoleAssignmentScheduleInstance {
         [object] $ErrorAction
     )
 
-    return [pscustomobject]@{
-        Id               = "$vaultScope/providers/Microsoft.Authorization/roleAssignmentScheduleInstances/00000000-0000-0000-0000-000000000108"
-        Scope            = $vaultScope
-        PrincipalId      = '88888888-8888-8888-8888-888888888888'
-        PrincipalType    = 'ServicePrincipal'
-        RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/$secretsUserRoleId"
-        AssignmentType   = 'Activated'
-        MemberType       = 'Direct'
-        Status           = 'Provisioned'
-        StartDateTime    = '2026-01-01T00:00:00Z'
-        EndDateTime      = '2026-01-01T08:00:00Z'
-        ExpandedProperties = [pscustomobject]@{
-            Principal    = [pscustomobject]@{ DisplayName = 'Activated Application' }
-            RoleDefinition = [pscustomobject]@{ DisplayName = 'Key Vault Secrets User' }
+    return @(
+        [pscustomobject]@{
+            Id               = "$resourceGroupScope/providers/Microsoft.Authorization/roleAssignmentScheduleInstances/00000000-0000-0000-0000-000000000108"
+            Scope            = $resourceGroupScope
+            PrincipalId      = '88888888-8888-8888-8888-888888888888'
+            PrincipalType    = 'User'
+            PrincipalDisplayName = 'Activated Reader'
+            PrincipalEmail   = 'activated-reader@example.invalid'
+            RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/$readerRoleId"
+            RoleDefinitionDisplayName = 'Reader'
+            AssignmentType   = 'Activated'
+            MemberType       = 'Direct'
+            Status           = 'Provisioned'
+            StartDateTime    = '2026-01-01T00:00:00Z'
+            EndDateTime      = '2026-01-01T08:00:00Z'
+        },
+        [pscustomobject]@{
+            Id               = "$vaultScope/providers/Microsoft.Authorization/roleAssignmentScheduleInstances/00000000-0000-0000-0000-000000000110"
+            Scope            = $vaultScope
+            PrincipalId      = '89898989-8989-8989-8989-898989898989'
+            PrincipalType    = 'ServicePrincipal'
+            PrincipalDisplayName = 'Activated Application'
+            RoleDefinitionId = "$subscriptionScope/providers/Microsoft.Authorization/roleDefinitions/$secretsUserRoleId"
+            RoleDefinitionDisplayName = 'Key Vault Secrets User'
+            AssignmentType   = 'Activated'
+            MemberType       = 'Direct'
+            Status           = 'Provisioned'
+            StartDateTime    = '2026-01-01T00:00:00Z'
+            EndDateTime      = '2026-01-01T08:00:00Z'
         }
-    }
+    )
 }
 
 function Get-AzDenyAssignment {
@@ -303,8 +317,8 @@ function Get-AzDenyAssignment {
 
 $reviewPath = Join-Path $testOutputPath '16-management-plane-access-review.csv'
 $reviewRows = @(Import-Csv -LiteralPath $reviewPath)
-if ($reviewRows.Count -ne 7) {
-    throw "Expected seven management-plane review rows, got $($reviewRows.Count)."
+if ($reviewRows.Count -ne 8) {
+    throw "Expected eight management-plane review rows, got $($reviewRows.Count)."
 }
 $excludedRows = @(
     Import-Csv -LiteralPath (Join-Path $testOutputPath '22-non-management-rbac-exclusions.csv')
@@ -390,6 +404,40 @@ $pimEligibleRow = $reviewRows |
 if ($pimEligibleRow.AssignmentState -ne 'Eligible') {
     throw 'PIM eligibility was not included in the authorization review.'
 }
+if ($pimEligibleRow.RoleDefinitionName -ne 'Reader') {
+    throw "PIM eligible role name was '$($pimEligibleRow.RoleDefinitionName)' instead of 'Reader'."
+}
+$pimActiveReviewRow = $reviewRows |
+    Where-Object {
+        $_.RecordType -eq 'AzurePimAssignment' -and
+        $_.RoleDefinitionId -eq $readerRoleId
+    } |
+    Select-Object -First 1
+if (-not $pimActiveReviewRow) {
+    throw 'Management-plane PIM active schedule was not included in the authorization review.'
+}
+if ($pimActiveReviewRow.RoleDefinitionName -ne 'Reader') {
+    throw "PIM active role name was '$($pimActiveReviewRow.RoleDefinitionName)' instead of 'Reader'."
+}
+if ($pimActiveReviewRow.PrincipalDisplayName -ne 'Activated Reader') {
+    throw 'PIM active principal display name was not populated from the schedule instance.'
+}
+if ($pimActiveReviewRow.PrincipalSignInName -ne 'activated-reader@example.invalid') {
+    throw 'PIM active principal email was not populated from the schedule instance.'
+}
+if ($pimActiveReviewRow.AuthorizationPlane -ne 'ManagementPlaneOnly') {
+    throw "PIM active role plane was '$($pimActiveReviewRow.AuthorizationPlane)'."
+}
+$blankReviewPimRoles = @(
+    $reviewRows |
+        Where-Object {
+            $_.RecordType -like 'AzurePim*' -and
+            [string]::IsNullOrWhiteSpace($_.RoleDefinitionName)
+        }
+)
+if ($blankReviewPimRoles.Count -gt 0) {
+    throw "Extended review contains $($blankReviewPimRoles.Count) PIM rows with blank role names."
+}
 $pimActiveExcludedRow = $excludedRows |
     Where-Object { $_.RecordType -eq 'AzurePimAssignment' } |
     Select-Object -First 1
@@ -469,8 +517,8 @@ if (-not (Test-Path -LiteralPath $standaloneOutputPath)) {
     throw 'Standalone management-plane CSV was not created.'
 }
 $standaloneRows = @(Import-Csv -LiteralPath $standaloneOutputPath)
-if ($standaloneRows.Count -ne 7) {
-    throw "Expected seven standalone management-plane rows, got $($standaloneRows.Count)."
+if ($standaloneRows.Count -ne 8) {
+    throw "Expected eight standalone management-plane rows, got $($standaloneRows.Count)."
 }
 if ($standaloneRows.SubscriptionName -contains '') {
     throw 'Standalone export did not resolve the keys subscription name.'
@@ -498,6 +546,37 @@ if ($standaloneUnknownRoleRow.IncludeInManagementPlan -ne 'ReviewRequired') {
 }
 if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'PimEligibleRoleAssignment' })) {
     throw 'Standalone CSV did not include PIM eligibility.'
+}
+$standalonePimActiveRow = $standaloneRows |
+    Where-Object {
+        $_.RecordType -eq 'PimActiveRoleAssignment' -and
+        $_.RoleDefinitionId -eq $readerRoleId
+    } |
+    Select-Object -First 1
+if (-not $standalonePimActiveRow) {
+    throw 'Standalone CSV did not include the management-plane PIM active schedule.'
+}
+if ($standalonePimActiveRow.RoleDefinitionName -ne 'Reader') {
+    throw "Standalone PIM active role name was '$($standalonePimActiveRow.RoleDefinitionName)'."
+}
+if ($standalonePimActiveRow.PrincipalDisplayName -ne 'Activated Reader') {
+    throw 'Standalone PIM active principal display name was blank or incorrect.'
+}
+if ($standalonePimActiveRow.PrincipalSignInName -ne 'activated-reader@example.invalid') {
+    throw 'Standalone PIM active principal sign-in name was blank or incorrect.'
+}
+if ($standalonePimActiveRow.AuthorizationPlane -ne 'ManagementPlaneOnly') {
+    throw "Standalone PIM active authorization plane was '$($standalonePimActiveRow.AuthorizationPlane)'."
+}
+$blankStandalonePimRoles = @(
+    $standaloneRows |
+        Where-Object {
+            $_.RecordType -like 'Pim*' -and
+            [string]::IsNullOrWhiteSpace($_.RoleDefinitionName)
+        }
+)
+if ($blankStandalonePimRoles.Count -gt 0) {
+    throw "Standalone CSV contains $($blankStandalonePimRoles.Count) PIM rows with blank role names."
 }
 if (-not ($standaloneRows | Where-Object { $_.RecordType -eq 'DenyAssignment' })) {
     throw 'Standalone CSV did not include management-plane deny assignments.'

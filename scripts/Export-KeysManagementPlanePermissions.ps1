@@ -664,7 +664,9 @@ function Add-RoleAssignmentRow {
     }
     else {
         [string](Get-FirstValue -InputObject $Assignment -Path @(
+            'RoleDefinitionDisplayName',
             'RoleDefinitionName',
+            'ExpandedPropertiesRoleDefinitionDisplayName',
             'ExpandedProperties.RoleDefinition.DisplayName'
         ))
     }
@@ -675,10 +677,12 @@ function Add-RoleAssignmentRow {
         PrincipalId                  = [string](Get-FirstValue -InputObject $Assignment -Path @('ObjectId', 'PrincipalId'))
         PrincipalType                = [string](Get-FirstValue -InputObject $Assignment -Path @('ObjectType', 'PrincipalType'))
         PrincipalDisplayName         = [string](Get-FirstValue -InputObject $Assignment -Path @(
+            'PrincipalDisplayName',
             'DisplayName',
+            'ExpandedPropertiesPrincipalDisplayName',
             'ExpandedProperties.Principal.DisplayName'
         ))
-        PrincipalSignInName          = [string](Get-FirstValue -InputObject $Assignment -Path @('SignInName'))
+        PrincipalSignInName          = [string](Get-FirstValue -InputObject $Assignment -Path @('PrincipalEmail', 'SignInName'))
         RoleDefinitionName           = $roleName
         RoleDefinitionId             = $roleDefinitionId
         IsCustomRole                 = $roleMetadata.IsCustomRole
@@ -720,7 +724,7 @@ try {
     $roleDefinitionIndex = @{}
     foreach ($definition in $roleDefinitions) {
         $roleId = Get-RoleDefinitionGuid (
-            Get-FirstValue -InputObject $definition -Path @('Name', 'Id')
+            Get-FirstValue -InputObject $definition -Path @('Id', 'Name')
         )
         if (-not [string]::IsNullOrWhiteSpace($roleId)) {
             $roleDefinitionIndex[$roleId.ToLowerInvariant()] = $definition
